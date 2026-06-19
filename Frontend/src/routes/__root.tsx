@@ -140,7 +140,7 @@ function AppLayout() {
       ...(user.role !== "Uploader"
         ? [{ id: "action-center", label: "Action Center", to: "/action-center" }]
         : []),
-      ...(user.role !== "Uploader" ? [{ id: "logs", label: "Logs & Savings", to: "/logs" }] : []),
+      ...(user.role !== "Uploader" && user.role !== "Analysis" ? [{ id: "logs", label: "Logs & Savings", to: "/logs" }] : []),
       ...(user.role !== "Uploader"
         ? [
             {

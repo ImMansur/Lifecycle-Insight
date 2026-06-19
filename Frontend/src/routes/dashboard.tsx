@@ -76,6 +76,7 @@ import {
   FilterBar,
   MetricCard,
   ChartsSection,
+  wildcardMatch,
   type TimeFilter,
   type PriorityFilter,
 } from "@/components/wom/HomeTab";
@@ -85,13 +86,6 @@ type FilterKey = string;
 export const Route = createFileRoute("/dashboard")({
   validateSearch: (search: Record<string, unknown>) => ({
     tab: (search.tab as string | undefined) ?? "Home",
-    q: (search.q as string | undefined) ?? "",
-    filter: (search.filter as FilterKey | undefined) ?? ("all" as FilterKey),
-    time: (search.time as string | undefined) ?? "all",
-    priority: (search.priority as string | undefined) ?? "all",
-    clients: (search.clients as string | undefined) ?? "",
-    locations: (search.locations as string | undefined) ?? "",
-    parts: (search.parts as string | undefined) ?? "",
   }),
   component: Dashboard,
 });
@@ -486,6 +480,48 @@ function getConfidenceScore(r: {
   return Math.max(5, Math.min(100, base - ocrPenalty - fieldPenalty));
 }
 
+function DebouncedInput({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  className?: string;
+}) {
+  const [localVal, setLocalVal] = useState(value);
+  const lastPropagated = useRef(value);
+
+  // Sync with external value changes only
+  useEffect(() => {
+    if (value !== lastPropagated.current) {
+      setLocalVal(value);
+      lastPropagated.current = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localVal !== value) {
+        lastPropagated.current = localVal;
+        onChange(localVal);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [localVal, onChange, value]);
+
+  return (
+    <Input
+      value={localVal}
+      onChange={(e) => setLocalVal(e.target.value)}
+      placeholder={placeholder}
+      className={className}
+    />
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 function Dashboard() {
@@ -507,13 +543,15 @@ function Dashboard() {
 
   // ── All filter state lives in the URL ─────────────────────────────────────
   const activeTab = search.tab;
-  const filter = search.filter as FilterKey;
-  const query = search.q;
-  const recTimeFilter = search.time as TimeFilter;
-  const recPriorityFilter = search.priority as PriorityFilter;
-  const recClients = search.clients ? search.clients.split("|") : ([] as string[]);
-  const recLocations = search.locations ? search.locations.split("|") : ([] as string[]);
-  const recParts = search.parts ? search.parts.split("|") : ([] as string[]);
+
+  // Local React states instead of URL search params to ensure instant typing response
+  const [query, setQuery] = useState("");
+  const [recClients, setRecClients] = useState("");
+  const [recLocations, setRecLocations] = useState("");
+  const [recParts, setRecParts] = useState("");
+  const [recDesc, setRecDesc] = useState("");
+  const [recTimeFilter, setRecTimeFilter] = useState<TimeFilter>("all");
+  const [recPriorityFilter, setRecPriorityFilter] = useState<PriorityFilter>("all");
 
   const setSearch = (patch: Partial<typeof search>) =>
     navigate({
@@ -524,13 +562,6 @@ function Dashboard() {
     });
 
   const setActiveTab = (v: string) => setSearch({ tab: v });
-  const setFilter = (v: FilterKey) => setSearch({ filter: v });
-  const setQuery = (v: string) => setSearch({ q: v });
-  const setRecTimeFilter = (v: TimeFilter) => setSearch({ time: v });
-  const setRecPriorityFilter = (v: PriorityFilter) => setSearch({ priority: v });
-  const setRecClients = (v: string[]) => setSearch({ clients: v.join("|") });
-  const setRecLocations = (v: string[]) => setSearch({ locations: v.join("|") });
-  const setRecParts = (v: string[]) => setSearch({ parts: v.join("|") });
 
   const qc = useQueryClient();
   const deleteMutation = useMutation({
@@ -608,26 +639,44 @@ function Dashboard() {
           return false;
       }
       if (recPriorityFilter !== "all" && r.priority !== recPriorityFilter) return false;
-      if (recClients.length > 0 && !recClients.includes(r.customer ?? "")) return false;
-      if (recLocations.length > 0 && !recLocations.includes(r.location ?? "")) return false;
-      if (recParts.length > 0 && !r.partNumbers.some((p) => recParts.includes(p.number)))
-        return false;
+      
+      // Free-text wildcard search criteria
+      if (recClients && !wildcardMatch(r.customer, recClients)) return false;
+      if (recLocations && !wildcardMatch(r.location, recLocations)) return false;
+      if (recParts && !r.partNumbers.some((p) => wildcardMatch(p.number, recParts))) return false;
+      if (recDesc && !(
+        wildcardMatch(r.equipment, recDesc) || 
+        r.partNumbers.some((p) => wildcardMatch(p.description, recDesc)) ||
+        (r.lineItems ?? []).some((li) => wildcardMatch(li.description, recDesc))
+      )) return false;
+
       return true;
     });
-  }, [recommendations, recTimeFilter, recPriorityFilter, recClients, recLocations, recParts]);
+  }, [recommendations, recTimeFilter, recPriorityFilter, recClients, recLocations, recParts, recDesc]);
 
   // ── Table rows: filtered + text search → drives the records table only ───
   const tableRows = useMemo(() => {
     if (!query) return filtered;
-    const q = query.toLowerCase();
+    let q = query.trim().toLowerCase();
+    if (
+      (q.startsWith('"') && q.endsWith('"')) ||
+      (q.startsWith("'") && q.endsWith("'"))
+    ) {
+      q = q.slice(1, -1).trim();
+    }
+    if (!q) return filtered;
     return filtered.filter((r) => {
       const hay = [
         r.customer,
         r.equipment,
         r.salesOrder,
         r.purchaseOrder,
+        r.jobOrProject,
+        r.location,
         r.sourceFile,
         ...r.partNumbers.map((p) => p.number),
+        ...r.partNumbers.map((p) => p.description),
+        ...(r.lineItems ?? []).map((li) => li.description),
         ...r.serials,
       ]
         .filter(Boolean)
@@ -678,9 +727,10 @@ function Dashboard() {
     query,
     recTimeFilter,
     recPriorityFilter,
-    recClients.join(),
-    recLocations.join(),
-    recParts.join(),
+    recClients,
+    recLocations,
+    recParts,
+    recDesc,
   ]);
 
   function toggleSort(key: typeof sortKey) {
@@ -725,25 +775,6 @@ function Dashboard() {
       </button>
     );
   }
-
-  const recClientOptions = useMemo(
-    () =>
-      [...new Set(recommendations.map((r) => r.customer).filter(Boolean) as string[])].sort(
-        (a, b) => a.localeCompare(b),
-      ),
-    [recommendations],
-  );
-  const recLocationOptions = useMemo(
-    () =>
-      [...new Set(recommendations.map((r) => r.location).filter(Boolean) as string[])].sort(
-        (a, b) => a.localeCompare(b),
-      ),
-    [recommendations],
-  );
-  const recPartOptions = useMemo(() => {
-    const all = recommendations.flatMap((r) => r.partNumbers.map((p) => p.number));
-    return [...new Set(all)].sort((a, b) => a.localeCompare(b));
-  }, [recommendations]);
 
   // ── KPI metrics (from filtered results) ───────────────────────────────────
   const recMetrics = useMemo(() => {
@@ -818,15 +849,14 @@ function Dashboard() {
               setTimeFilter={setRecTimeFilter}
               priorityFilter={recPriorityFilter}
               setPriorityFilter={setRecPriorityFilter}
-              selectedClients={recClients}
-              setSelectedClients={setRecClients}
-              selectedLocations={recLocations}
-              setSelectedLocations={setRecLocations}
-              selectedParts={recParts}
-              setSelectedParts={setRecParts}
-              clientOptions={recClientOptions}
-              locationOptions={recLocationOptions}
-              partNumberOptions={recPartOptions}
+              clientSearch={recClients}
+              setClientSearch={setRecClients}
+              locationSearch={recLocations}
+              setLocationSearch={setRecLocations}
+              partSearch={recParts}
+              setPartSearch={setRecParts}
+              descSearch={recDesc}
+              setDescSearch={setRecDesc}
               count={filtered.length}
               total={recommendations.length}
             />
@@ -939,9 +969,9 @@ function Dashboard() {
                 {/* Search */}
                 <div className="relative w-full max-w-sm">
                   <Search className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/50" />
-                  <Input
+                  <DebouncedInput
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
+                    onChange={setQuery}
                     placeholder="Search customer, SO, part…"
                     className="h-11 border-border/40 bg-secondary/30 pl-11 text-sm placeholder:text-muted-foreground/40 focus:bg-background transition-all rounded-xl"
                   />

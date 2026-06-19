@@ -541,20 +541,104 @@ export function MultiSelectDropdown({
 export type TimeFilter = "all" | "overdue" | "3m" | "6m" | "12m";
 export type PriorityFilter = "all" | "High" | "Low" | "Manual review";
 
+export function wildcardMatch(value: string | null | undefined, pattern: string): boolean {
+  let cleanPattern = pattern.trim();
+  if (
+    (cleanPattern.startsWith('"') && cleanPattern.endsWith('"')) ||
+    (cleanPattern.startsWith("'") && cleanPattern.endsWith("'"))
+  ) {
+    cleanPattern = cleanPattern.slice(1, -1).trim();
+  }
+
+  if (!cleanPattern) return true;
+  if (!value) return false;
+
+  // Standard partial match if no wildcards are used
+  if (!cleanPattern.includes("*") && !cleanPattern.includes("?")) {
+    return value.toLowerCase().includes(cleanPattern.toLowerCase());
+  }
+
+  // Convert wildcard pattern to RegExp
+  // Escape regex special chars except * and ?
+  const escaped = cleanPattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const regexStr = "^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
+  const regex = new RegExp(regexStr, "i");
+  return regex.test(value);
+}
+
+function SearchInput({
+  value,
+  onChange,
+  placeholder,
+  icon,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  icon: React.ReactNode;
+}) {
+  const [localVal, setLocalVal] = useState(value);
+  const lastPropagated = useRef(value);
+
+  // Sync with external value changes only
+  useEffect(() => {
+    if (value !== lastPropagated.current) {
+      setLocalVal(value);
+      lastPropagated.current = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localVal !== value) {
+        lastPropagated.current = localVal;
+        onChange(localVal);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [localVal, onChange, value]);
+
+  return (
+    <div className="relative group w-full">
+      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/60 transition-colors group-focus-within:text-primary">
+        {icon}
+      </span>
+      <input
+        type="text"
+        value={localVal}
+        onChange={(e) => setLocalVal(e.target.value)}
+        placeholder={placeholder}
+        className="h-11 w-full rounded-2xl border border-border/40 bg-secondary/40 pl-11 pr-10 text-sm transition-all placeholder:text-muted-foreground/50 hover:bg-secondary/60 hover:border-primary/20 focus:bg-background focus:border-primary/50 focus:ring-1 focus:ring-primary/20 focus:outline-none text-foreground font-medium"
+      />
+      {localVal && (
+        <button
+          type="button"
+          onClick={() => {
+            setLocalVal("");
+            onChange("");
+          }}
+          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground/60 hover:text-foreground hover:bg-background transition-colors"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FilterBar({
   timeFilter,
   setTimeFilter,
   priorityFilter,
   setPriorityFilter,
-  selectedClients,
-  setSelectedClients,
-  selectedLocations,
-  setSelectedLocations,
-  selectedParts,
-  setSelectedParts,
-  clientOptions,
-  locationOptions,
-  partNumberOptions,
+  clientSearch,
+  setClientSearch,
+  locationSearch,
+  setLocationSearch,
+  partSearch,
+  setPartSearch,
+  descSearch,
+  setDescSearch,
   count,
   total,
 }: {
@@ -562,15 +646,14 @@ export function FilterBar({
   setTimeFilter: (v: TimeFilter) => void;
   priorityFilter: PriorityFilter;
   setPriorityFilter: (v: PriorityFilter) => void;
-  selectedClients: string[];
-  setSelectedClients: (v: string[]) => void;
-  selectedLocations: string[];
-  setSelectedLocations: (v: string[]) => void;
-  selectedParts: string[];
-  setSelectedParts: (v: string[]) => void;
-  clientOptions: string[];
-  locationOptions: string[];
-  partNumberOptions: string[];
+  clientSearch: string;
+  setClientSearch: (v: string) => void;
+  locationSearch: string;
+  setLocationSearch: (v: string) => void;
+  partSearch: string;
+  setPartSearch: (v: string) => void;
+  descSearch: string;
+  setDescSearch: (v: string) => void;
   count: number;
   total: number;
 }) {
@@ -644,27 +727,30 @@ export function FilterBar({
         </div>
 
         {/* Row 2: Deep Filters */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <MultiSelectDropdown
-            options={clientOptions}
-            selected={selectedClients}
-            onChange={setSelectedClients}
-            placeholder="All clients"
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 sm:grid-cols-2">
+          <SearchInput
+            value={clientSearch}
+            onChange={setClientSearch}
+            placeholder="Search customer…"
             icon={<Users className="size-4" />}
           />
-          <MultiSelectDropdown
-            options={locationOptions}
-            selected={selectedLocations}
-            onChange={setSelectedLocations}
-            placeholder="All locations"
+          <SearchInput
+            value={locationSearch}
+            onChange={setLocationSearch}
+            placeholder="Search location…"
             icon={<MapPin className="size-4" />}
           />
-          <MultiSelectDropdown
-            options={partNumberOptions}
-            selected={selectedParts}
-            onChange={setSelectedParts}
-            placeholder="All part numbers"
+          <SearchInput
+            value={partSearch}
+            onChange={setPartSearch}
+            placeholder="Search item / part…"
             icon={<Package className="size-4" />}
+          />
+          <SearchInput
+            value={descSearch}
+            onChange={setDescSearch}
+            placeholder="Search item description…"
+            icon={<FileText className="size-4" />}
           />
         </div>
       </div>
@@ -1123,29 +1209,10 @@ export function HomeTab({
 }: HomeTabProps) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
-  const [selectedClients, setSelectedClients] = useState<string[]>([]);
-  const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
-  const [selectedParts, setSelectedParts] = useState<string[]>([]);
-
-  // ── Sorted unique client names for dropdown ────────────────────────────────
-  const clientOptions = useMemo(() => {
-    return [...new Set(recommendations.map((r) => r.customer).filter(Boolean) as string[])].sort(
-      (a, b) => a.localeCompare(b),
-    );
-  }, [recommendations]);
-
-  // ── Sorted unique locations (from jobOrProject) for dropdown ──────────────
-  const locationOptions = useMemo(() => {
-    return [...new Set(recommendations.map((r) => r.location).filter(Boolean) as string[])].sort(
-      (a, b) => a.localeCompare(b),
-    );
-  }, [recommendations]);
-
-  // ── Sorted unique part numbers for dropdown ────────────────────────────
-  const partNumberOptions = useMemo(() => {
-    const all = recommendations.flatMap((r) => r.partNumbers.map((p) => p.number));
-    return [...new Set(all)].sort((a, b) => a.localeCompare(b));
-  }, [recommendations]);
+  const [clientSearch, setClientSearch] = useState("");
+  const [locationSearch, setLocationSearch] = useState("");
+  const [partSearch, setPartSearch] = useState("");
+  const [descSearch, setDescSearch] = useState("");
 
   // ── Apply filters ──────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -1165,16 +1232,14 @@ export function HomeTab({
       // Priority filter
       if (priorityFilter !== "all" && r.priority !== priorityFilter) return false;
 
-      // Client name — match any of the selected clients
-      if (selectedClients.length > 0 && !selectedClients.includes(r.customer ?? "")) return false;
-
-      // Client location — match any of the selected locations
-      if (selectedLocations.length > 0 && !selectedLocations.includes(r.location ?? ""))
-        return false;
-
-      // Part numbers — match any of the selected parts
-      if (selectedParts.length > 0 && !r.partNumbers.some((p) => selectedParts.includes(p.number)))
-        return false;
+      // Free-text wildcard search criteria
+      if (clientSearch && !wildcardMatch(r.customer, clientSearch)) return false;
+      if (locationSearch && !wildcardMatch(r.location, locationSearch)) return false;
+      if (partSearch && !r.partNumbers.some((p) => wildcardMatch(p.number, partSearch))) return false;
+      if (descSearch && !(
+        wildcardMatch(r.equipment, descSearch) || 
+        r.partNumbers.some((p) => wildcardMatch(p.description, descSearch))
+      )) return false;
 
       return true;
     });
@@ -1182,9 +1247,10 @@ export function HomeTab({
     recommendations,
     timeFilter,
     priorityFilter,
-    selectedClients,
-    selectedLocations,
-    selectedParts,
+    clientSearch,
+    locationSearch,
+    partSearch,
+    descSearch,
   ]);
 
   // ── Derived metrics ────────────────────────────────────────────────────────
@@ -1436,15 +1502,14 @@ export function HomeTab({
             setTimeFilter={setTimeFilter}
             priorityFilter={priorityFilter}
             setPriorityFilter={setPriorityFilter}
-            selectedClients={selectedClients}
-            setSelectedClients={setSelectedClients}
-            selectedLocations={selectedLocations}
-            setSelectedLocations={setSelectedLocations}
-            selectedParts={selectedParts}
-            setSelectedParts={setSelectedParts}
-            clientOptions={clientOptions}
-            locationOptions={locationOptions}
-            partNumberOptions={partNumberOptions}
+            clientSearch={clientSearch}
+            setClientSearch={setClientSearch}
+            locationSearch={locationSearch}
+            setLocationSearch={setLocationSearch}
+            partSearch={partSearch}
+            setPartSearch={setPartSearch}
+            descSearch={descSearch}
+            setDescSearch={setDescSearch}
             count={filtered.length}
             total={recommendations.length}
           />

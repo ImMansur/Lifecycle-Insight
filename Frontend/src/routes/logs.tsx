@@ -54,7 +54,7 @@ function LogsPage() {
   // Protect route
   useEffect(() => {
     if (!loading) {
-      if (!user || user.role === "Uploader") {
+      if (!user || user.role === "Uploader" || user.role === "Analysis") {
         navigate({ to: "/dashboard" });
       }
     }
@@ -63,7 +63,7 @@ function LogsPage() {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["compression-logs"],
     queryFn: fetchCompressionLogs,
-    enabled: !!user && user.role !== "Uploader",
+    enabled: !!user && user.role !== "Uploader" && user.role !== "Analysis",
   });
 
   const clearMutation = useMutation({
@@ -140,7 +140,7 @@ function LogsPage() {
     return r.includes("admin") || r === "fleet manager";
   }, [user?.role]);
 
-  if (loading || !user || user.role === "Uploader") {
+  if (loading || !user || user.role === "Uploader" || user.role === "Analysis") {
     return null;
   }
 

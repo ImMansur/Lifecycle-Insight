@@ -2,15 +2,10 @@ import {
   ShieldCheck,
   Clock,
   TrendingUp,
-  AlertTriangle,
   CheckCircle2,
   FileText,
-  Cpu,
-  Database,
-  Zap,
   Info,
   Calendar,
-  Gauge,
 } from "lucide-react";
 
 interface Rule {
@@ -96,55 +91,10 @@ const PRIORITY_RULES: Rule[] = [
   },
 ];
 
-const PIPELINE_STAGES = [
-  {
-    icon: <FileText className="size-5" />,
-    label: "Document Ingestion",
-    description:
-      "PDF, DOC, and DOCX certificates of conformance are uploaded via the platform. Files are validated and staged for processing.",
-    status: "active",
-    tech: "WOM Platform",
-  },
-  {
-    icon: <Cpu className="size-5" />,
-    label: "Document Intelligence",
-    description:
-      "Multi-modal OCR for extracting unstructured data from complex scanned certificates.",
-    status: "active",
-    tech: "AI v4.0",
-  },
-  {
-    icon: <Zap className="size-5" />,
-    label: "AI Structured Extraction",
-    description:
-      "Large language model parses extracted text to identify customer name, equipment description, part numbers, serial numbers, certificate dates, and order references.",
-    status: "active",
-    tech: "AI Language Engine",
-  },
-  {
-    icon: <Gauge className="size-5" />,
-    label: "Lifecycle Rule Engine",
-    description:
-      "Extracted dates are evaluated against the 60-month recertification rule. Priority and status labels are assigned. Recommendations are generated.",
-    status: "active",
-    tech: "WOM Rule Engine",
-  },
-  {
-    icon: <Database className="size-5" />,
-    label: "Firestore Storage",
-    description:
-      "Structured recommendations are persisted in Google Cloud Firestore and indexed for real-time retrieval by the platform.",
-    status: "active",
-    tech: "Google Firestore",
-  },
-];
-
 const ACCEPTED_FORMATS = [
   { ext: "PDF", description: "Native or scanned PDF certificates", supported: true },
   { ext: "DOC", description: "Microsoft Word 97–2003 documents", supported: true },
   { ext: "DOCX", description: "Microsoft Word Open XML documents", supported: true },
-  { ext: "XLS/XLSX", description: "Excel spreadsheets", supported: false },
-  { ext: "TIF/TIFF", description: "Scanned image files", supported: false },
 ];
 
 export function LifecycleRulesTab() {
@@ -310,61 +260,6 @@ export function LifecycleRulesTab() {
           </div>
         </div>
 
-        {/* AI Pipeline */}
-        <div>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="size-8 rounded-lg bg-success/10 grid place-items-center">
-              <Cpu className="size-4 text-success" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-foreground">
-                AI Processing Pipeline
-              </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                End-to-end document intelligence flow from upload to recommendation
-              </p>
-            </div>
-          </div>
-
-          <div className="relative">
-            {/* Connector line */}
-            <div className="absolute left-[27px] top-12 bottom-12 w-px bg-border/50 hidden lg:block" />
-
-            <div className="space-y-4">
-              {PIPELINE_STAGES.map((stage, idx) => (
-                <div
-                  key={stage.label}
-                  className="relative flex gap-5 rounded-2xl border border-border/50 bg-background/30 backdrop-blur-md p-5 transition-all hover:bg-background/50"
-                >
-                  <div className="relative z-10 size-11 rounded-xl bg-background border border-border/50 grid place-items-center shrink-0 text-primary shadow-sm">
-                    {stage.icon}
-                    <span className="absolute -top-2 -right-2 size-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-mono text-[10px] font-black">
-                      {idx + 1}
-                    </span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-1.5">
-                      <h3 className="font-display text-sm font-bold text-foreground">
-                        {stage.label}
-                      </h3>
-                      <span className="rounded-full bg-success/10 border border-success/20 px-2 py-0.5 font-mono text-[10px] font-bold text-success flex items-center gap-1">
-                        <CheckCircle2 className="size-2.5" />
-                        Active
-                      </span>
-                      <span className="ml-auto rounded bg-foreground/[0.04] px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                        {stage.tech}
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      {stage.description}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {/* Accepted Document Formats */}
         <div>
           <div className="flex items-center gap-3 mb-6">
@@ -395,17 +290,10 @@ export function LifecycleRulesTab() {
                     <div className="text-xs text-muted-foreground mt-0.5">{fmt.description}</div>
                   </div>
                   <div>
-                    {fmt.supported ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-3 py-1 font-mono text-[11px] font-bold text-success">
-                        <CheckCircle2 className="size-3" />
-                        Supported
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/30 px-3 py-1 font-mono text-[11px] font-medium text-muted-foreground">
-                        <AlertTriangle className="size-3" />
-                        Not supported
-                      </span>
-                    )}
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-3 py-1 font-mono text-[11px] font-bold text-success">
+                      <CheckCircle2 className="size-3" />
+                      Supported
+                    </span>
                   </div>
                 </div>
               ))}
