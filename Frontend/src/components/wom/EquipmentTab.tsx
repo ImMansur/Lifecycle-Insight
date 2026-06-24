@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Recommendation } from "@/lib/wom-data";
+import { getEquipmentNames } from "@/lib/wom-data";
 import { StatusBadge, PriorityChip } from "./StatusBadge";
 import {
   Wrench,
@@ -37,42 +38,45 @@ function groupEquipment(recs: Recommendation[]): EquipmentGroup[] {
   const map = new Map<string, EquipmentGroup>();
 
   for (const r of recs) {
-    const key = r.equipment?.trim() || "Unidentified Equipment";
-    let g = map.get(key);
-    if (!g) {
-      g = {
-        name: key,
-        totalRecords: 0,
-        customers: [],
-        partNumbers: [],
-        earliestRecertDue: null,
-        minMonthsToRecert: null,
-        highestPriority: r.priority,
-        worstStatus: r.status,
-        records: [],
-      };
-      map.set(key, g);
-    }
-
-    g.totalRecords++;
-    g.records.push(r);
-
-    if (r.customer && !g.customers.includes(r.customer)) {
-      g.customers.push(r.customer);
-    }
-    for (const p of r.partNumbers) {
-      if (!g.partNumbers.includes(p.number)) g.partNumbers.push(p.number);
-    }
-    if (r.monthsToRecert !== null) {
-      if (g.minMonthsToRecert === null || r.monthsToRecert < g.minMonthsToRecert) {
-        g.minMonthsToRecert = r.monthsToRecert;
-        g.earliestRecertDue = r.recertificationDue;
+    const equipments = getEquipmentNames(r);
+    const keys = equipments.length > 0 ? equipments : ["Unidentified Equipment"];
+    for (const key of keys) {
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          name: key,
+          totalRecords: 0,
+          customers: [],
+          partNumbers: [],
+          earliestRecertDue: null,
+          minMonthsToRecert: null,
+          highestPriority: r.priority,
+          worstStatus: r.status,
+          records: [],
+        };
+        map.set(key, g);
       }
+
+      g.totalRecords++;
+      g.records.push(r);
+
+      if (r.customer && !g.customers.includes(r.customer)) {
+        g.customers.push(r.customer);
+      }
+      for (const p of r.partNumbers) {
+        if (!g.partNumbers.includes(p.number)) g.partNumbers.push(p.number);
+      }
+      if (r.monthsToRecert !== null) {
+        if (g.minMonthsToRecert === null || r.monthsToRecert < g.minMonthsToRecert) {
+          g.minMonthsToRecert = r.monthsToRecert;
+          g.earliestRecertDue = r.recertificationDue;
+        }
+      }
+      if (r.priority === "High") g.highestPriority = "High";
+      const ci = STATUS_ORDER.indexOf(g.worstStatus);
+      const ni = STATUS_ORDER.indexOf(r.status);
+      if (ni !== -1 && (ci === -1 || ni < ci)) g.worstStatus = r.status;
     }
-    if (r.priority === "High") g.highestPriority = "High";
-    const ci = STATUS_ORDER.indexOf(g.worstStatus);
-    const ni = STATUS_ORDER.indexOf(r.status);
-    if (ni !== -1 && (ci === -1 || ni < ci)) g.worstStatus = r.status;
   }
 
   return Array.from(map.values()).sort((a, b) => {

@@ -641,6 +641,7 @@ export function FilterBar({
   setDescSearch,
   count,
   total,
+  extraActions,
 }: {
   timeFilter: TimeFilter;
   setTimeFilter: (v: TimeFilter) => void;
@@ -656,6 +657,7 @@ export function FilterBar({
   setDescSearch: (v: string) => void;
   count: number;
   total: number;
+  extraActions?: React.ReactNode;
 }) {
   const timeOptions: [TimeFilter, string][] = [
     ["all", "All time"],
@@ -718,11 +720,17 @@ export function FilterBar({
             ))}
           </div>
 
-          {/* Record count */}
-          <div className="ml-auto flex items-center gap-2 font-display text-xl font-bold">
-            <span className="text-[#0D1117]">{count}</span>
-            <span className="text-muted-foreground/30 font-medium">/</span>
-            <span className="text-muted-foreground/30 font-medium text-sm">{total} records</span>
+          {/* Record count + Actions */}
+          <div className="ml-auto flex items-center gap-5">
+            <div className="flex items-center gap-2 font-display text-sm font-bold select-none">
+              <span className="text-[#0D1117] font-extrabold text-base">{count}</span>
+              <span className="text-muted-foreground/30 font-medium">/</span>
+              <span className="text-muted-foreground/45 font-medium text-xs">{total} records</span>
+            </div>
+            {extraActions && (
+              <div className="h-5 w-px bg-border/40" />
+            )}
+            {extraActions}
           </div>
         </div>
 

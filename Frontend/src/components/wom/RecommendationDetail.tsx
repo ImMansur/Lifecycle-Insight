@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusBadge, PriorityChip } from "./StatusBadge";
 import type { Recommendation } from "@/lib/wom-data";
-import { groupSerialsByPart } from "@/lib/wom-data";
+import { groupSerialsByPart, getEquipmentNames } from "@/lib/wom-data";
 import { updateRecommendation, suggestNextSteps, fetchDocumentUrl } from "@/lib/api";
 import type { RecommendationPatch, Action } from "@/lib/api";
 import {
@@ -36,7 +36,8 @@ import {
 
 function buildPlainText(rec: Recommendation): string {
   const customer = rec.customer ?? "Valued Customer";
-  const equipment = rec.equipment ?? "your WOM-manufactured equipment";
+  const equipments = getEquipmentNames(rec);
+  const equipment = equipments.length > 0 ? equipments.join(", ") : (rec.equipment ?? "your WOM-manufactured equipment");
   const partList =
     rec.partNumbers.length > 0
       ? rec.partNumbers
@@ -116,7 +117,8 @@ function EmailDraftDialog({
   const [copied, setCopied] = useState(false);
 
   const customer = rec.customer ?? "Valued Customer";
-  const equipment = rec.equipment ?? "your WOM-manufactured equipment";
+  const equipments = getEquipmentNames(rec);
+  const equipment = equipments.length > 0 ? equipments.join(", ") : (rec.equipment ?? "your WOM-manufactured equipment");
   const subject = `Recertification Notice – ${equipment}${rec.salesOrder ? ` | SO ${rec.salesOrder}` : ""}`;
   const date = new Date().toLocaleDateString("en-US", {
     year: "numeric",
@@ -900,6 +902,25 @@ export function RecommendationDetail({
                   </h3>
                   <div className="grid grid-cols-2 gap-x-6 gap-y-5">
                     <Field label="Customer" value={rec.customer} />
+                    <Field
+                      label="Equipment"
+                      value={(() => {
+                        const equipments = getEquipmentNames(rec);
+                        if (equipments.length === 0) return null;
+                        return (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {equipments.map((eq, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-block bg-slate-50 text-slate-800 border border-slate-200/60 rounded px-2 py-0.5 font-semibold text-[11px] leading-normal shadow-sm"
+                              >
+                                {eq}
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    />
                     <Field label="Job / Project" value={rec.jobOrProject} />
                     <Field label="Sales Order" value={rec.salesOrder} mono />
                     <Field label="Customer Purchase Order" value={rec.purchaseOrder} mono />
@@ -938,7 +959,7 @@ export function RecommendationDetail({
                       return <span className="text-sm text-muted-foreground">—</span>;
                     }
                     return (
-                      <div className="space-y-3">
+                      <div className="space-y-4">
                         <div className="flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                           <span>
                             {groups.length} part{groups.length !== 1 ? "s" : ""}
@@ -948,55 +969,80 @@ export function RecommendationDetail({
                             {rec.serials.length} serial{rec.serials.length !== 1 ? "s" : ""}
                           </span>
                         </div>
-                        <div className="space-y-2">
-                          {groups.map((g) => (
-                            <div
-                              key={g.part.number}
-                              className="rounded-lg border border-border bg-surface-elevated p-3"
-                            >
-                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                {g.part.qty != null && (
-                                  <span className="rounded bg-amber/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber">
-                                    {g.part.qty}×
-                                  </span>
-                                )}
-                                <span className="font-mono text-sm font-semibold text-foreground">
-                                  {g.part.number}
-                                </span>
-                                {g.part.description && (
-                                  <span className="text-xs text-muted-foreground">
-                                    — {g.part.description}
-                                  </span>
-                                )}
-                              </div>
-                              {g.serials.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {g.serials.map((s) => (
-                                    <span
-                                      key={s}
-                                      className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent"
-                                    >
-                                      <Hash className="mr-0.5 inline size-2.5" />
-                                      {s}
+                        
+                        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                          <table className="w-full border-collapse text-left text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500 select-none">
+                                <th className="py-2 px-3">Equipment Name</th>
+                                <th className="py-2 px-3 w-[140px]">Part No</th>
+                                <th className="py-2 px-3 w-[60px] text-center">Qty</th>
+                                <th className="py-2 px-3 min-w-[140px]">Serial No</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {groups.map((g) => (
+                                <tr key={g.part.number} className="hover:bg-slate-50/40 transition-colors">
+                                  {/* Equipment Name */}
+                                  <td className="py-2.5 px-3 text-slate-700 font-medium leading-normal">
+                                    {g.part.description ?? <span className="text-slate-400 italic font-normal">No description</span>}
+                                  </td>
+                                  
+                                  {/* Part No */}
+                                  <td className="py-2.5 px-3 align-middle">
+                                    <span className="inline-block font-mono font-bold text-[11px] text-slate-800 bg-slate-50 border border-slate-200/80 rounded px-1.5 py-0.5 shadow-sm">
+                                      {g.part.number}
                                     </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                                  </td>
+                                  
+                                  {/* Qty */}
+                                  <td className="py-2.5 px-3 text-center align-middle">
+                                    {g.part.qty != null ? (
+                                      <span className="inline-block bg-amber-50 border border-amber-200/60 text-amber-700 font-bold font-mono text-[11px] rounded px-1.5 py-0.5">
+                                        {g.part.qty}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">—</span>
+                                    )}
+                                  </td>
+                                  
+                                  {/* Serial No */}
+                                  <td className="py-2.5 px-3 align-middle">
+                                    {g.serials.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {g.serials.map((s) => (
+                                          <span
+                                            key={s}
+                                            className="inline-flex items-center rounded border border-accent/20 bg-accent/5 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-accent"
+                                          >
+                                            <Hash className="mr-0.5 inline size-2.5" />
+                                            {s}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-300 font-mono text-[10px]">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
+                        
                         {unattributedSerials.length > 0 && (
-                          <div className="rounded-lg border border-dashed border-border bg-surface-elevated/40 p-3">
-                            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                              Other serials ({unattributedSerials.length})
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/30 p-3.5 mt-2">
+                            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 flex items-center gap-1.5">
+                              <span className="size-1.5 rounded-full bg-slate-400" />
+                              Unattributed / Other Serials ({unattributedSerials.length})
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
+                            <div className="flex flex-wrap gap-1">
                               {unattributedSerials.map((s) => (
                                 <span
                                   key={s}
-                                  className="rounded border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-xs text-accent"
+                                  className="inline-flex items-center rounded border border-accent/20 bg-accent/5 px-2 py-0.5 font-mono text-[10px] text-accent"
                                 >
-                                  <Hash className="mr-1 inline size-3" />
+                                  <Hash className="mr-1 size-2.5" />
                                   {s}
                                 </span>
                               ))}

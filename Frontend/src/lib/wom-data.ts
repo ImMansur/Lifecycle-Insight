@@ -124,3 +124,30 @@ export function groupSerialsByPart(rec: Recommendation): {
   }));
   return { groups, unattributedSerials: [...rec.serials] };
 }
+
+/** Extract unique part descriptions from partNumbers, falling back to rec.equipment if empty. */
+export function getEquipmentNames(rec: {
+  partNumbers?: PartEntry[];
+  equipment?: string | null;
+}): string[] {
+  const equipments = Array.from(
+    new Set(
+      rec.partNumbers
+        ? rec.partNumbers
+            .map((p) => p.description?.trim())
+            .filter(Boolean) as string[]
+        : []
+    )
+  );
+  if (equipments.length > 0) {
+    return equipments;
+  }
+  if (rec.equipment) {
+    return rec.equipment
+      .split(/[,;]/)
+      .map((e) => e.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+

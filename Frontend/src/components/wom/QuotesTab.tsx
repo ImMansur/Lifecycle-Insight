@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Recommendation } from "@/lib/wom-data";
+import { getEquipmentNames } from "@/lib/wom-data";
 import { PriorityChip } from "./StatusBadge";
 import { RecommendationDetail } from "./RecommendationDetail";
 import {
@@ -233,7 +234,10 @@ export function QuotesTab({
                   <div className="min-w-0 flex items-center gap-2">
                     <Wrench className="size-3.5 text-muted-foreground/50 shrink-0" />
                     <div className="truncate text-sm text-foreground">
-                      {r.equipment ?? <span className="text-muted-foreground">—</span>}
+                      {(() => {
+                        const equipments = getEquipmentNames(r);
+                        return equipments.length > 0 ? equipments.join(", ") : <span className="text-muted-foreground">—</span>;
+                      })()}
                     </div>
                   </div>
 

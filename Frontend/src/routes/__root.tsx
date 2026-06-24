@@ -136,6 +136,9 @@ function AppLayout() {
       ...(user.role !== "Uploader"
         ? [{ id: "home", label: "Home", to: "/dashboard", search: { tab: "Home" } }]
         : []),
+      ...(user.role !== "Uploader"
+        ? [{ id: "records", label: "Records", to: "/records" }]
+        : []),
       ...(user.role !== "Analysis" ? [{ id: "upload", label: "Upload", to: "/upload" }] : []),
       ...(user.role !== "Uploader"
         ? [{ id: "action-center", label: "Action Center", to: "/action-center" }]

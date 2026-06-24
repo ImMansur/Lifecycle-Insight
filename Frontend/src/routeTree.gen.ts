@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteImport } from './routes/users'
 import { Route as UploadRouteImport } from './routes/upload'
+import { Route as RecordsRouteImport } from './routes/records'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
@@ -25,6 +26,11 @@ const UsersRoute = UsersRouteImport.update({
 const UploadRoute = UploadRouteImport.update({
   id: '/upload',
   path: '/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecordsRoute = RecordsRouteImport.update({
+  id: '/records',
+  path: '/records',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogsRoute = LogsRouteImport.update({
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
+  '/records': typeof RecordsRoute
   '/upload': typeof UploadRoute
   '/users': typeof UsersRoute
 }
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
+  '/records': typeof RecordsRoute
   '/upload': typeof UploadRoute
   '/users': typeof UsersRoute
 }
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
+  '/records': typeof RecordsRoute
   '/upload': typeof UploadRoute
   '/users': typeof UsersRoute
 }
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/logs'
+    | '/records'
     | '/upload'
     | '/users'
   fileRoutesByTo: FileRoutesByTo
@@ -98,6 +108,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/logs'
+    | '/records'
     | '/upload'
     | '/users'
   id:
@@ -107,6 +118,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/logs'
+    | '/records'
     | '/upload'
     | '/users'
   fileRoutesById: FileRoutesById
@@ -117,6 +129,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   LoginRoute: typeof LoginRoute
   LogsRoute: typeof LogsRoute
+  RecordsRoute: typeof RecordsRoute
   UploadRoute: typeof UploadRoute
   UsersRoute: typeof UsersRoute
 }
@@ -135,6 +148,13 @@ declare module '@tanstack/react-router' {
       path: '/upload'
       fullPath: '/upload'
       preLoaderRoute: typeof UploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/records': {
+      id: '/records'
+      path: '/records'
+      fullPath: '/records'
+      preLoaderRoute: typeof RecordsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/logs': {
@@ -181,6 +201,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   LoginRoute: LoginRoute,
   LogsRoute: LogsRoute,
+  RecordsRoute: RecordsRoute,
   UploadRoute: UploadRoute,
   UsersRoute: UsersRoute,
 }
