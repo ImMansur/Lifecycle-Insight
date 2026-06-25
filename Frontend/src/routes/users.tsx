@@ -178,7 +178,9 @@ function UsersPage() {
     );
   }
 
-  const sortedUsers = [...users].sort((a, b) => {
+  const displayedUsers = users.filter(u => u.role !== "Developer");
+
+  const sortedUsers = [...displayedUsers].sort((a, b) => {
     if (a.email === "admin@womgroup.com") return -1;
     if (b.email === "admin@womgroup.com") return 1;
     const aIsSelf = a.uid === user?.uid;
@@ -213,7 +215,7 @@ function UsersPage() {
       </div>
 
       {/* Roles Explanation UI */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Card 1: Fleet Manager */}
         <div className="bg-white dark:bg-slate-900 border border-border/60 p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow duration-200 space-y-4">
           <div className="flex items-center gap-4">
@@ -275,25 +277,6 @@ function UsersPage() {
             </strong>
           </p>
         </div>
-
-        {/* Card 4: Developer */}
-        <div className="bg-white dark:bg-slate-900 border border-border/60 p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow duration-200 space-y-4">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center justify-center size-12 rounded-2xl bg-[#EEF2FF] border border-[#E0E7FF] text-[#4F46E5] shrink-0">
-              <Shield className="size-6 text-[#4F46E5]" />
-            </div>
-            <div className="leading-tight">
-              <h3 className="font-bold text-lg text-foreground">Developer</h3>
-              <span className="text-[10px] font-black uppercase tracking-[0.1em] text-[#4F46E5]">
-                SYSTEM & AUDIT CONTROL
-              </span>
-            </div>
-          </div>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Developer privileges. Access to the Developer Portal to view high-precision activity logs,
-            track active users, analyze page counts/OCR operations, inspect raw JSON metadata, and monitor system diagnostics.
-          </p>
-        </div>
       </div>
 
       {/* Users Table */}
@@ -303,7 +286,7 @@ function UsersPage() {
             <Users className="size-5 text-[#FF7235]" /> Active System Credentials
           </h2>
           <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/60 px-3 py-1 rounded-full font-bold">
-            {users.length} Account{users.length !== 1 ? "s" : ""}
+            {displayedUsers.length} Account{displayedUsers.length !== 1 ? "s" : ""}
           </span>
         </div>
 
@@ -636,42 +619,7 @@ function UsersPage() {
                     )}
                   </button>
 
-                  {/* Developer Card */}
-                  <button
-                    type="button"
-                    onClick={() => setRole("Developer")}
-                    className={`w-full text-left p-3.5 rounded-2xl border transition-all duration-200 flex gap-4 relative cursor-pointer ${
-                      role === "Developer"
-                        ? "bg-white dark:bg-slate-950 border-[#10B981] dark:border-emerald-500 shadow-md ring-1 ring-[#10B981]/15"
-                        : "bg-[#EAEDF0] dark:bg-slate-800/40 border-transparent hover:bg-white/60 dark:hover:bg-slate-800/60"
-                    }`}
-                  >
-                    <div
-                      className={`flex items-center justify-center size-10 rounded-full shrink-0 ${
-                        role === "Developer"
-                          ? "bg-[#ECFDF5] text-[#10B981] dark:bg-emerald-950/40 dark:text-emerald-400"
-                          : "border border-muted-foreground/20 text-muted-foreground/60 bg-[#EAEDF0] dark:bg-slate-800"
-                      }`}
-                    >
-                      <Shield className="size-5" />
-                    </div>
-                    <div className="pr-6 space-y-0.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-sm text-foreground">Developer</span>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-[#EEF2FF] text-[#4F46E5] border border-[#E0E7FF]">
-                          SYSTEM
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        Developer control. Access the Developer Portal to view audit logs, track active users, analyze OCR pages, and check system health.
-                      </p>
-                    </div>
-                    {role === "Developer" && (
-                      <div className="absolute top-4 right-4 size-5 rounded-full border-2 border-[#10B981] bg-white flex items-center justify-center shrink-0">
-                        <div className="size-2 rounded-full bg-[#10B981]" />
-                      </div>
-                    )}
-                  </button>
+
                 </div>
               </div>
             </div>
