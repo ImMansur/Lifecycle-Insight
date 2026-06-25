@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
 from firebase_admin import auth, firestore
 
@@ -53,7 +53,7 @@ async def list_users():
 
 
 @router.post("/users", response_model=UserResponse)
-async def create_user(user: UserCreate):
+async def create_user(user: UserCreate, request: Request):
     """Create a new user in Firebase Auth and save their profile/role in Firestore."""
     try:
         # 1. Create the user in Firebase Auth
@@ -74,6 +74,16 @@ async def create_user(user: UserCreate):
         )
 
         logger.info("Created user %s with role %s", fb_user.uid, user.role)
+        
+        # Log activity
+        from store import log_activity
+        log_activity(
+            request=request,
+            action="CREATE_USER",
+            description=f"Registered new user credentials: {user.displayName} ({user.role})",
+            details={"user_email": user.email, "user_name": user.displayName, "user_role": user.role}
+        )
+        
         return UserResponse(
             uid=fb_user.uid,
             email=user.email,
@@ -109,17 +119,35 @@ async def get_user_role(uid: str):
 
 
 @router.delete("/users/{uid}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(uid: str):
+async def delete_user(uid: str, request: Request):
     """Delete a user from Firebase Auth and clean up their profile in Firestore."""
     try:
+        # Get existing user details first for logging
+        db = firestore.client()
+        doc = db.collection("users").document(uid).get()
+        user_name = "unknown"
+        user_email = "unknown"
+        if doc.exists:
+            data = doc.to_dict()
+            user_name = data.get("displayName", "unknown")
+            user_email = data.get("email", "unknown")
+
         # 1. Delete from Firebase Auth
         auth.delete_user(uid)
 
         # 2. Delete the profile document in Firestore
-        db = firestore.client()
         db.collection("users").document(uid).delete()
 
         logger.info("Deleted user %s", uid)
+        
+        # Log activity
+        from store import log_activity
+        log_activity(
+            request=request,
+            action="DELETE_USER",
+            description=f"Deleted user credentials: {user_name} ({user_email})",
+            details={"deleted_uid": uid, "user_name": user_name, "user_email": user_email}
+        )
     except Exception as e:
         logger.exception("Failed to delete user %s", uid)
         raise HTTPException(

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from models import Action, ActionComment, CreateAction, PatchAction, AddComment
 from store import action_store, recommendation_store
 
@@ -26,7 +26,7 @@ async def list_actions():
 
 
 @router.post("/actions", response_model=Action, status_code=201)
-async def create_action(body: CreateAction):
+async def create_action(body: CreateAction, request: Request):
     """Create a new action item."""
     now = _now()
     action = Action(
@@ -40,6 +40,15 @@ async def create_action(body: CreateAction):
         updatedAt=now,
     )
     action_store.add(action)
+    
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="CREATE_ACTION",
+        description=f"Created Action Center item: {action.title}",
+        details={"action_id": action.id, "title": action.title, "linked_rec_id": action.linkedRecId}
+    )
     return action
 
 
@@ -52,7 +61,7 @@ async def get_action(action_id: str):
 
 
 @router.patch("/actions/{action_id}", response_model=Action)
-async def patch_action(action_id: str, body: PatchAction):
+async def patch_action(action_id: str, body: PatchAction, request: Request):
     """Update title, description, or status of an action."""
     fields = body.model_dump(exclude_none=True)
     if not fields:
@@ -65,19 +74,39 @@ async def patch_action(action_id: str, body: PatchAction):
     updated = action_store.get(action_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Could not retrieve updated action.")
+        
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="UPDATE_ACTION",
+        description=f"Updated Action Center item: {updated.title}",
+        details={"action_id": action_id, "title": updated.title, "updated_fields": list(fields.keys())}
+    )
     return updated
 
 
 @router.delete("/actions/{action_id}", status_code=204)
-async def delete_action(action_id: str):
+async def delete_action(action_id: str, request: Request):
+    existing = action_store.get(action_id)
     if not action_store.remove(action_id):
         raise HTTPException(status_code=404, detail=f"Action '{action_id}' not found.")
+        
+    # Log activity
+    from store import log_activity
+    title = existing.title if existing else "unknown action"
+    log_activity(
+        request=request,
+        action="DELETE_ACTION",
+        description=f"Deleted Action Center item: {title}",
+        details={"action_id": action_id, "title": title}
+    )
 
 
 # ─── Comments ─────────────────────────────────────────────────────────────────
 
 @router.post("/actions/{action_id}/comments", response_model=Action)
-async def add_comment(action_id: str, body: AddComment):
+async def add_comment(action_id: str, body: AddComment, request: Request):
     """Append a comment to an action item."""
     action = action_store.get(action_id)
     if action is None:
@@ -95,11 +124,20 @@ async def add_comment(action_id: str, body: AddComment):
     result = action_store.get(action_id)
     if result is None:
         raise HTTPException(status_code=500, detail="Could not retrieve updated action.")
+        
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="ADD_COMMENT",
+        description=f"Added comment to action: {result.title}",
+        details={"action_id": action_id, "comment_text": comment.text, "comment_author": comment.author}
+    )
     return result
 
 
 @router.delete("/actions/{action_id}/comments/{comment_id}", response_model=Action)
-async def delete_comment(action_id: str, comment_id: str):
+async def delete_comment(action_id: str, comment_id: str, request: Request):
     """Remove a comment from an action item."""
     action = action_store.get(action_id)
     if action is None:
@@ -113,6 +151,15 @@ async def delete_comment(action_id: str, comment_id: str):
     result = action_store.get(action_id)
     if result is None:
         raise HTTPException(status_code=500, detail="Could not retrieve updated action.")
+        
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="DELETE_COMMENT",
+        description=f"Deleted comment from action: {result.title}",
+        details={"action_id": action_id, "comment_id": comment_id}
+    )
     return result
 
 
@@ -128,7 +175,7 @@ Do not include explanations, preamble, or markdown.
 
 
 @router.post("/actions/{action_id}/suggest", response_model=Action)
-async def suggest_next_steps(action_id: str):
+async def suggest_next_steps(action_id: str, request: Request):
     """Use OpenAI to generate suggested next steps, then save them as a log entry."""
     action = action_store.get(action_id)
     if action is None:
@@ -202,4 +249,13 @@ async def suggest_next_steps(action_id: str):
     result = action_store.get(action_id)
     if result is None:
         raise HTTPException(status_code=500, detail="Could not retrieve updated action.")
+        
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="AI_SUGGEST_STEPS",
+        description=f"Generated AI suggestions for action: {result.title}",
+        details={"action_id": action_id}
+    )
     return result

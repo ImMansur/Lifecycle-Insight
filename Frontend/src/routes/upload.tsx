@@ -131,11 +131,15 @@ function UploadPage() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadSubStatus, setUploadSubStatus] = useState("");
   const [uploadFileProgress, setUploadFileProgress] = useState<FileUploadProgress[]>([]);
+  const [uploadDuration, setUploadDuration] = useState<string>("");
+  const startTimeRef = useRef<number>(0);
 
   useEffect(() => {
     if (!loading) {
       if (!user) {
         navigate({ to: "/login" });
+      } else if (user.role === "Developer") {
+        navigate({ to: "/developer" });
       } else if (user.role === "Analysis") {
         navigate({ to: "/dashboard" });
       }
@@ -266,6 +270,7 @@ function UploadPage() {
       }
     },
     onMutate: () => {
+      startTimeRef.current = performance.now();
       setLoadingVisible(true);
       setUploadProgress(0);
       setUploadStatus("Uploading Documents");
@@ -273,10 +278,13 @@ function UploadPage() {
       setUploadFileProgress([]);
     },
     onSuccess: (data) => {
+      const durationSec = ((performance.now() - startTimeRef.current) / 1000).toFixed(1);
+      setUploadDuration(durationSec);
+
       // Snap to 100%
       setUploadProgress(100);
       setUploadStatus("Complete");
-      setUploadSubStatus("Redirecting to dashboard...");
+      setUploadSubStatus("Finished processing!");
 
       qc.invalidateQueries({ queryKey: ["recommendations"] });
 
@@ -308,14 +316,12 @@ function UploadPage() {
         return;
       }
 
-      // Wait a moment at 100% so the user sees completion, then navigate
-      setTimeout(() => {
-        setLoadingVisible(false);
-        setUploadProgress(0);
-        setUploadFileProgress([]);
-        setFilePages({});
-        navigate({ to: "/dashboard", search: { tab: "Home" } });
-      }, 800);
+      // Display results screen with duration
+      setUploadResult(data);
+      setLoadingVisible(false);
+      setUploadProgress(0);
+      setUploadFileProgress([]);
+      setFilePages({});
     },
     onError: (err: Error) => {
       addNotification({
@@ -465,9 +471,10 @@ function UploadPage() {
               </div>
             )}
             <h1 className="font-display text-4xl font-black tracking-tight">Upload Logs</h1>
-            <p className="text-muted-foreground">
-              Processed {uploadResult.processed} files. Generated{" "}
-              {uploadResult.recommendations?.length || 0} recommendations.
+            <p className="text-muted-foreground text-base">
+              Processed {uploadResult.processed} file{uploadResult.processed !== 1 ? "s" : ""} and generated{" "}
+              <strong>{uploadResult.recommendations?.length || 0}</strong> recommendation{uploadResult.recommendations?.length !== 1 ? "s" : ""}{" "}
+              in <span className="text-primary font-mono font-extrabold text-lg px-2 py-0.5 bg-primary/5 rounded-md border border-primary/10">{uploadDuration}s</span>.
             </p>
           </div>
 

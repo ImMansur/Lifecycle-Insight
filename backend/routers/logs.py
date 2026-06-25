@@ -1,7 +1,7 @@
 """Logs router — exposes endpoints to fetch compression & savings logs."""
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, Request
 from models import CompressionLogsResponse, CompressionLogsSummary
 from store import compression_log_store
 
@@ -35,6 +35,12 @@ async def get_compression_logs():
 
 
 @router.post("/compression-logs/clear", status_code=status.HTTP_204_NO_CONTENT)
-async def clear_compression_logs():
+async def clear_compression_logs(request: Request):
     """Clear all compression logs in Firestore."""
     compression_log_store.clear()
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="CLEAR_COMPRESSION_LOGS",
+        description="Cleared all PDF compression & savings logs"
+    )

@@ -20,7 +20,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown, LogOut, User } from "lucide-react";
+import { ChevronDown, LogOut, User, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import "../styles.css";
 
@@ -111,6 +111,19 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         <DropdownMenuItem className="gap-2 text-muted-foreground cursor-pointer">
           <User className="size-4" /> Profile
         </DropdownMenuItem>
+        {(user.role === "Developer" || user.role === "System Administrator") && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link
+                to="/developer"
+                className="flex w-full items-center gap-2 text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <Terminal className="size-4" /> Developer Portal
+              </Link>
+            </DropdownMenuItem>
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="gap-2 text-destructive focus:text-destructive cursor-pointer"
@@ -132,6 +145,9 @@ function AppLayout() {
 
   const navItems = useMemo(() => {
     if (!user) return [];
+    if (user.role === "Developer") {
+      return [];
+    }
     return [
       ...(user.role !== "Uploader"
         ? [{ id: "home", label: "Home", to: "/dashboard", search: { tab: "Home" } }]
@@ -146,13 +162,13 @@ function AppLayout() {
       ...(user.role !== "Uploader" && user.role !== "Analysis" ? [{ id: "logs", label: "Logs & Savings", to: "/logs" }] : []),
       ...(user.role !== "Uploader"
         ? [
-            {
-              id: "rules",
-              label: "Lifecycle Rules",
-              to: "/dashboard",
-              search: { tab: "Lifecycle Rules" },
-            },
-          ]
+          {
+            id: "rules",
+            label: "Lifecycle Rules",
+            to: "/dashboard",
+            search: { tab: "Lifecycle Rules" },
+          },
+        ]
         : []),
       ...(user.role === "Fleet Manager" || user.role === "System Administrator"
         ? [{ id: "users", label: "Users", to: "/users" }]
@@ -232,33 +248,34 @@ function AppLayout() {
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/20 flex flex-col relative">
-        {/* Fixed Background Layers */}
-        <div className="fixed inset-0 z-0 pointer-events-none">
-          <div className="absolute inset-0 bg-mesh" />
-          <div className="absolute inset-0 bg-grid opacity-30" />
-        </div>
+      {/* Fixed Background Layers */}
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="absolute inset-0 bg-mesh" />
+        <div className="absolute inset-0 bg-grid opacity-30" />
+      </div>
 
-        <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl relative">
-          <div className="mx-auto flex h-20 max-w-[1600px] items-center gap-8 px-6">
-            <div className="flex items-center gap-5">
-              <div className="relative size-14 shrink-0 overflow-hidden rounded-full border-2 border-primary/20 bg-white shadow-xl shadow-primary/10 transition-all hover:scale-110 hover:shadow-primary/20">
-                <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 to-transparent" />
-                <img
-                  src="/logo.png"
-                  alt="WOM Logo"
-                  className="relative z-10 size-full object-contain p-1.5"
-                />
+      <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl relative">
+        <div className="mx-auto flex h-20 max-w-[1600px] items-center gap-8 px-6">
+          <div className="flex items-center gap-5">
+            <div className="relative size-14 shrink-0 overflow-hidden rounded-full border-2 border-primary/20 bg-white shadow-xl shadow-primary/10 transition-all hover:scale-110 hover:shadow-primary/20">
+              <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 to-transparent" />
+              <img
+                src="/logo.png"
+                alt="WOM Logo"
+                className="relative z-10 size-full object-contain p-1.5"
+              />
+            </div>
+            <div className="leading-tight">
+              <div className="font-display text-lg font-black tracking-tight text-accent">
+                WOM <span className="text-primary">Lifecycle</span>
               </div>
-              <div className="leading-tight">
-                <div className="font-display text-lg font-black tracking-tight text-accent">
-                  WOM <span className="text-primary">Lifecycle</span>
-                </div>
-                <div className="font-mono text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/80">
-                  Worldwide Oilfield Machine
-                </div>
+              <div className="font-mono text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/80">
+                Worldwide Oilfield Machine
               </div>
             </div>
+          </div>
 
+          {user.role !== "Developer" && (
             <nav
               ref={containerRef}
               className="relative mx-auto hidden items-center gap-1 rounded-full bg-secondary/80 p-1.5 backdrop-blur-sm md:flex"
@@ -307,23 +324,28 @@ function AppLayout() {
                 );
               })}
             </nav>
+          )}
 
-            <div className="ml-auto flex items-center gap-6">
-              <div className="hidden sm:flex items-center gap-2">
-                <NotificationBell />
-              </div>
-              <div className="h-8 w-px bg-border/50 hidden sm:block" />
-              <div className="flex items-center gap-3">
-                <UserMenu onSignOut={() => setShowSignOutLoading(true)} />
-              </div>
+          <div className="ml-auto flex items-center gap-6">
+            {user.role !== "Developer" && (
+              <>
+                <div className="hidden sm:flex items-center gap-2">
+                  <NotificationBell />
+                </div>
+                <div className="h-8 w-px bg-border/50 hidden sm:block" />
+              </>
+            )}
+            <div className="flex items-center gap-3">
+              <UserMenu onSignOut={() => setShowSignOutLoading(true)} />
             </div>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <main className="flex-1 flex flex-col relative z-10">
-          <Outlet />
-        </main>
-      </div>
+      <main className="flex-1 flex flex-col relative z-10">
+        <Outlet />
+      </main>
+    </div>
   );
 }
 

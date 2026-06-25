@@ -1,10 +1,32 @@
 import type { Recommendation } from "./wom-data";
+import { auth } from "./firebase";
 
 const BASE =
   typeof window !== "undefined" &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
     ? (import.meta.env.VITE_API_URL ?? "http://localhost:8000")
     : "";
+
+async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const currentUser = auth.currentUser;
+  const role = typeof window !== "undefined" ? localStorage.getItem("wom_user_role") || "Uploader" : "Uploader";
+  
+  const headers = {
+    ...(options.headers || {}),
+  } as Record<string, string>;
+
+  if (currentUser) {
+    headers["x-user-uid"] = currentUser.uid;
+    headers["x-user-email"] = currentUser.email || "";
+    headers["x-user-name"] = currentUser.displayName || "";
+    headers["x-user-role"] = role;
+  }
+
+  return fetch(url, {
+    ...options,
+    headers,
+  });
+}
 
 export interface Summary {
   inputFolder: string;
@@ -42,7 +64,7 @@ export interface IngestResponse {
 }
 
 export async function fetchRecommendations(): Promise<RecommendationsResponse> {
-  const res = await fetch(`${BASE}/api/recommendations`);
+  const res = await authenticatedFetch(`${BASE}/api/recommendations`);
   if (!res.ok) throw new Error(`Failed to fetch recommendations: ${res.statusText}`);
   return res.json();
 }
@@ -55,13 +77,13 @@ export interface IngestProgress {
 }
 
 export async function fetchIngestStatus(uploadId: string): Promise<IngestProgress> {
-  const res = await fetch(`${BASE}/api/ingest/status/${encodeURIComponent(uploadId)}`);
+  const res = await authenticatedFetch(`${BASE}/api/ingest/status/${encodeURIComponent(uploadId)}`);
   if (!res.ok) throw new Error("Failed to fetch ingest status");
   return res.json();
 }
 
 export async function deleteIngestStatus(uploadId: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/ingest/status/${encodeURIComponent(uploadId)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/ingest/status/${encodeURIComponent(uploadId)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 204) {
@@ -73,7 +95,7 @@ export async function initUploadProgress(
   uploadId: string,
   filenames: string[],
 ): Promise<void> {
-  const res = await fetch(`${BASE}/api/ingest/init-progress`, {
+  const res = await authenticatedFetch(`${BASE}/api/ingest/init-progress`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ upload_id: uploadId, filenames }),
@@ -95,7 +117,7 @@ export interface ValidateDocumentResponse {
 export async function validateDocument(file: File): Promise<ValidateDocumentResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/api/validate-document`, {
+  const res = await authenticatedFetch(`${BASE}/api/validate-document`, {
     method: "POST",
     body: form,
   });
@@ -112,7 +134,7 @@ export async function ingestFiles(files: File[], uploadId?: string): Promise<Ing
     form.append("files", file);
   }
   const url = uploadId ? `${BASE}/api/ingest?upload_id=${encodeURIComponent(uploadId)}` : `${BASE}/api/ingest`;
-  const res = await fetch(url, {
+  const res = await authenticatedFetch(url, {
     method: "POST",
     body: form,
   });
@@ -150,7 +172,7 @@ export async function uploadFileInChunks(
     form.append("total_chunks", String(totalChunks));
 
     const url = uploadId ? `${BASE}/api/ingest-chunk?upload_id=${encodeURIComponent(uploadId)}` : `${BASE}/api/ingest-chunk`;
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: "POST",
       body: form,
     });
@@ -179,7 +201,7 @@ export interface UploadSasResponse {
  * directly to blob storage, bypassing Vercel's 4.5 MB function body limit.
  */
 export async function getUploadSas(filename: string): Promise<UploadSasResponse> {
-  const res = await fetch(`${BASE}/api/upload-sas?filename=${encodeURIComponent(filename)}`);
+  const res = await authenticatedFetch(`${BASE}/api/upload-sas?filename=${encodeURIComponent(filename)}`);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to get upload URL (${res.status}): ${text}`);
@@ -193,7 +215,7 @@ export async function getUploadSas(filename: string): Promise<UploadSasResponse>
  */
 export async function ingestFromBlob(blobNames: string[], uploadId?: string): Promise<IngestResponse> {
   const url = uploadId ? `${BASE}/api/ingest-from-blob?upload_id=${encodeURIComponent(uploadId)}` : `${BASE}/api/ingest-from-blob`;
-  const res = await fetch(url, {
+  const res = await authenticatedFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(blobNames),
@@ -208,7 +230,7 @@ export async function ingestFromBlob(blobNames: string[], uploadId?: string): Pr
 export async function confirmIngestUpdates(
   updates: ConfirmDuplicateItem[],
 ): Promise<IngestResponse> {
-  const res = await fetch(`${BASE}/api/ingest/confirm`, {
+  const res = await authenticatedFetch(`${BASE}/api/ingest/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ updates }),
@@ -221,7 +243,7 @@ export async function confirmIngestUpdates(
 }
 
 export async function deleteRecommendation(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/recommendations/${encodeURIComponent(id)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/recommendations/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 204) {
@@ -232,7 +254,7 @@ export async function deleteRecommendation(id: string): Promise<void> {
 export async function deleteMultipleRecommendations(
   ids: string[],
 ): Promise<{ deleted: number; not_found: string[] }> {
-  const res = await fetch(`${BASE}/api/recommendations/bulk-delete`, {
+  const res = await authenticatedFetch(`${BASE}/api/recommendations/bulk-delete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids }),
@@ -250,7 +272,7 @@ export async function fetchDocumentUrl(
   const needsSas = ext === "docx" || ext === "doc" || ext === "xlsx" || ext === "xls";
   if (needsSas) {
     // Office Online viewer requires a publicly accessible URL — use SAS
-    const res = await fetch(`${BASE}/api/documents/${encodeURIComponent(filename)}/url`);
+    const res = await authenticatedFetch(`${BASE}/api/documents/${encodeURIComponent(filename)}/url`);
     if (!res.ok) throw new Error(`Could not get document URL: ${res.statusText}`);
     return res.json();
   }
@@ -276,7 +298,7 @@ export async function updateRecommendation(
   id: string,
   patch: RecommendationPatch,
 ): Promise<import("./wom-data").Recommendation> {
-  const res = await fetch(`${BASE}/api/recommendations/${encodeURIComponent(id)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/recommendations/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -312,7 +334,7 @@ export interface Action {
 }
 
 export async function fetchActions(): Promise<Action[]> {
-  const res = await fetch(`${BASE}/api/actions`);
+  const res = await authenticatedFetch(`${BASE}/api/actions`);
   if (!res.ok) throw new Error(`Failed to fetch actions: ${res.statusText}`);
   return res.json();
 }
@@ -323,7 +345,7 @@ export async function createAction(body: {
   status?: ActionStatus;
   linkedRecId?: string;
 }): Promise<Action> {
-  const res = await fetch(`${BASE}/api/actions`, {
+  const res = await authenticatedFetch(`${BASE}/api/actions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -339,7 +361,7 @@ export async function patchAction(
   id: string,
   patch: { title?: string; description?: string; status?: ActionStatus; linkedRecId?: string },
 ): Promise<Action> {
-  const res = await fetch(`${BASE}/api/actions/${encodeURIComponent(id)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/actions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -352,7 +374,7 @@ export async function patchAction(
 }
 
 export async function deleteAction(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/actions/${encodeURIComponent(id)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/actions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 204) {
@@ -365,7 +387,7 @@ export async function addComment(
   text: string,
   author = "Admin",
 ): Promise<Action> {
-  const res = await fetch(`${BASE}/api/actions/${encodeURIComponent(actionId)}/comments`, {
+  const res = await authenticatedFetch(`${BASE}/api/actions/${encodeURIComponent(actionId)}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, author }),
@@ -378,7 +400,7 @@ export async function addComment(
 }
 
 export async function deleteComment(actionId: string, commentId: string): Promise<Action> {
-  const res = await fetch(
+  const res = await authenticatedFetch(
     `${BASE}/api/actions/${encodeURIComponent(actionId)}/comments/${encodeURIComponent(commentId)}`,
     { method: "DELETE" },
   );
@@ -390,7 +412,7 @@ export async function deleteComment(actionId: string, commentId: string): Promis
 }
 
 export async function suggestNextSteps(actionId: string): Promise<Action> {
-  const res = await fetch(`${BASE}/api/actions/${encodeURIComponent(actionId)}/suggest`, {
+  const res = await authenticatedFetch(`${BASE}/api/actions/${encodeURIComponent(actionId)}/suggest`, {
     method: "POST",
   });
   if (!res.ok) {
@@ -403,7 +425,7 @@ export async function suggestNextSteps(actionId: string): Promise<Action> {
 // ─── Excel Export ─────────────────────────────────────────────────────────────
 
 export async function exportToExcel(recIds: string[]): Promise<void> {
-  const res = await fetch(`${BASE}/api/export/excel`, {
+  const res = await authenticatedFetch(`${BASE}/api/export/excel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rec_ids: recIds }),
@@ -434,7 +456,7 @@ export interface UserProfile {
 }
 
 export async function fetchUsers(): Promise<UserProfile[]> {
-  const res = await fetch(`${BASE}/api/users`);
+  const res = await authenticatedFetch(`${BASE}/api/users`);
   if (!res.ok) throw new Error(`Failed to fetch users: ${res.statusText}`);
   return res.json();
 }
@@ -445,7 +467,7 @@ export async function createUser(body: {
   displayName: string;
   role: string;
 }): Promise<UserProfile> {
-  const res = await fetch(`${BASE}/api/users`, {
+  const res = await authenticatedFetch(`${BASE}/api/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -458,7 +480,7 @@ export async function createUser(body: {
 }
 
 export async function deleteUser(uid: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/users/${encodeURIComponent(uid)}`, {
+  const res = await authenticatedFetch(`${BASE}/api/users/${encodeURIComponent(uid)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 204) {
@@ -470,7 +492,7 @@ export async function fetchUserRole(uid: string): Promise<{ role: string }> {
   for (let i = 0; i < 3; i++) {
     try {
       const ts = new Date().getTime();
-      const res = await fetch(`${BASE}/api/users/role/${encodeURIComponent(uid)}?_t=${ts}`, {
+      const res = await authenticatedFetch(`${BASE}/api/users/role/${encodeURIComponent(uid)}?_t=${ts}`, {
         cache: "no-store"
       });
       if (!res.ok) throw new Error(`Failed to fetch user role: ${res.statusText}`);
@@ -515,16 +537,61 @@ export interface CompressionLogsResponse {
 }
 
 export async function fetchCompressionLogs(): Promise<CompressionLogsResponse> {
-  const res = await fetch(`${BASE}/api/compression-logs`);
+  const res = await authenticatedFetch(`${BASE}/api/compression-logs`);
   if (!res.ok) throw new Error(`Failed to fetch compression logs: ${res.statusText}`);
   return res.json();
 }
 
 export async function clearCompressionLogs(): Promise<void> {
-  const res = await fetch(`${BASE}/api/compression-logs/clear`, {
+  const res = await authenticatedFetch(`${BASE}/api/compression-logs/clear`, {
     method: "POST",
   });
   if (!res.ok && res.status !== 204) {
     throw new Error(`Failed to clear compression logs: ${res.statusText}`);
+  }
+}
+
+
+// ─── User Activity Logs ──────────────────────────────────────────────────────
+
+export interface ActivityLog {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  userRole: string;
+  action: string;
+  description: string;
+  details: Record<string, any> | null;
+  timestamp: string;
+}
+
+export async function fetchActivityLogs(): Promise<ActivityLog[]> {
+  const res = await authenticatedFetch(`${BASE}/api/activity-logs`);
+  if (!res.ok) throw new Error(`Failed to fetch activity logs: ${res.statusText}`);
+  return res.json();
+}
+
+export async function clearActivityLogs(): Promise<void> {
+  const res = await authenticatedFetch(`${BASE}/api/activity-logs/clear`, {
+    method: "POST",
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Failed to clear activity logs: ${res.statusText}`);
+  }
+}
+
+export async function logActivityEvent(
+  action: string,
+  description: string,
+  details?: Record<string, any>,
+): Promise<void> {
+  const res = await authenticatedFetch(`${BASE}/api/activity-logs/event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, description, details }),
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Failed to log client event: ${res.statusText}`);
   }
 }

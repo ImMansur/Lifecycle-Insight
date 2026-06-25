@@ -54,7 +54,11 @@ function LogsPage() {
   // Protect route
   useEffect(() => {
     if (!loading) {
-      if (!user || user.role === "Uploader" || user.role === "Analysis") {
+      if (!user) {
+        navigate({ to: "/login" });
+      } else if (user.role === "Developer") {
+        navigate({ to: "/developer" });
+      } else if (user.role === "Uploader" || user.role === "Analysis") {
         navigate({ to: "/dashboard" });
       }
     }

@@ -61,6 +61,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        localStorage.setItem("wom_user_role", role);
+
         setUser({
           uid: firebaseUser.uid,
           email: firebaseUser.email,
@@ -68,8 +70,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: firebaseUser.photoURL,
           role: role,
         });
+
+        // Log session login event once per browser session
+        const sessionKey = `wom_login_logged_${firebaseUser.uid}`;
+        if (!sessionStorage.getItem(sessionKey)) {
+          sessionStorage.setItem(sessionKey, "true");
+          const userName = firebaseUser.displayName || firebaseUser.email || "WOM User";
+          import("./api").then(({ logActivityEvent }) => {
+            logActivityEvent("LOGIN", `${userName} logged in`, {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              displayName: userName,
+              role: role,
+              userAgent: navigator.userAgent
+            }).catch((err) => console.error("Failed to log login event:", err));
+          });
+        }
       } else {
         setUser(null);
+        // Clear all login session flags in sessionStorage when logged out
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (key && key.startsWith("wom_login_logged_")) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach((key) => sessionStorage.removeItem(key));
       }
       setLoading(false);
     });
@@ -109,6 +136,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      // Clear the session storage flag immediately so it is ALWAYS cleared on logout
+      sessionStorage.removeItem(`wom_login_logged_${currentUser.uid}`);
+      try {
+        const { logActivityEvent } = await import("./api");
+        const role = localStorage.getItem("wom_user_role") || "Uploader";
+        const userName = currentUser.displayName || currentUser.email || "WOM User";
+        await logActivityEvent("LOGOUT", `${userName} logged out`, {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: userName,
+          role: role
+        });
+      } catch (e) {
+        console.error("Failed to log logout event:", e);
+      }
+    }
+    localStorage.removeItem("wom_user_role");
     await firebaseSignOut(auth);
   };
 

@@ -11,7 +11,7 @@ from typing import List, Optional
 
 import firebase_admin
 from firebase_admin import credentials, firestore
-from models import Action, Job, JobStatus, Recommendation, CompressionLog
+from models import Action, Job, JobStatus, Recommendation, CompressionLog, ActivityLog
 
 # Initialize Firebase Admin
 def initialize_firestore():
@@ -393,4 +393,100 @@ class UploadProgressStore:
 
 
 upload_progress_store_fs = UploadProgressStore()
+
+
+class ActivityLogStore:
+    """Firestore-backed store for User Activity Logs."""
+
+    def __init__(self) -> None:
+        self.db = initialize_firestore()
+        self.ready = self.db is not None
+
+    def all(self) -> List[ActivityLog]:
+        if not self.ready:
+            return []
+        try:
+            docs = self.db.collection("activity_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+            results: List[ActivityLog] = []
+            for doc in docs:
+                try:
+                    results.append(ActivityLog(**doc.to_dict()))
+                except Exception as e:
+                    logging.warning(f"Skipping invalid activity log doc {doc.id}: {e}")
+            return results
+        except Exception as e:
+            logging.error(f"Firestore error in ActivityLogStore.all(): {e}")
+            return []
+
+    def add(self, log: ActivityLog) -> None:
+        if not self.ready:
+            self.db = initialize_firestore()
+            self.ready = self.db is not None
+            if not self.ready:
+                logging.error("Cannot add activity log: Firestore still not initialized.")
+                return
+        try:
+            self.db.collection("activity_logs").document(log.id).set(log.model_dump())
+            logging.info(f"Activity log {log.id} saved to Firestore.")
+        except Exception as e:
+            logging.error(f"Firestore error in ActivityLogStore.add(): {e}")
+
+    def clear(self) -> None:
+        if not self.ready:
+            return
+        try:
+            batch = self.db.batch()
+            docs = self.db.collection("activity_logs").list_documents()
+            for doc in docs:
+                batch.delete(doc)
+            batch.commit()
+            logging.info("All activity logs cleared from Firestore.")
+        except Exception as e:
+            logging.error(f"Firestore error in ActivityLogStore.clear(): {e}")
+
+
+activity_log_store = ActivityLogStore()
+
+
+def log_activity(request: "fastapi.Request" | dict | None, action: str, description: str, details: dict = None) -> None:
+    """Helper to extract user headers from the incoming request and log system activity."""
+    import uuid
+    from datetime import datetime, timezone
+    
+    try:
+        uid = "system"
+        email = "system@womgroup.com"
+        name = "System"
+        role = "System"
+
+        if request is not None:
+            if isinstance(request, dict):
+                uid = request.get("uid", "system")
+                email = request.get("email", "system@womgroup.com")
+                name = request.get("name", "System")
+                role = request.get("role", "System")
+            else:
+                uid = request.headers.get("x-user-uid", "system")
+                email = request.headers.get("x-user-email", "system@womgroup.com")
+                name = request.headers.get("x-user-name", "System")
+                role = request.headers.get("x-user-role", "System")
+        
+        # Build log model
+        log_entry = ActivityLog(
+            id=str(uuid.uuid4()),
+            userId=uid,
+            userEmail=email,
+            userName=name,
+            userRole=role,
+            action=action,
+            description=description,
+            details=details or {},
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        activity_log_store.add(log_entry)
+    except Exception as e:
+        logging.error(f"Failed to log user activity: {e}")
+
+
 

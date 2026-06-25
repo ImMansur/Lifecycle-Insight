@@ -9,7 +9,7 @@ from typing import List
 
 import tempfile
 import uuid
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status, BackgroundTasks, Response
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status, BackgroundTasks, Response, Request
 from pydantic import BaseModel
 
 from models import (
@@ -263,6 +263,7 @@ async def background_ingest_files(
     upload_id: str,
     temp_files: list[tuple[Path, str, str]],
     initial_errors: list[str],
+    user_info: dict | None = None,
 ):
     try:
         results: list[Recommendation] = []
@@ -299,7 +300,7 @@ async def background_ingest_files(
 
         async def sem_process(fb: bytes, fn: str, ext: str):
             async with semaphore:
-                return await _extract_and_compress_one_file(fb, fn, None, upload_id)
+                return await _extract_and_compress_one_file(fb, fn, None, upload_id, user_info)
 
         tasks = [sem_process(fb, fn, ext) for fb, fn, ext in valid_files]
         gather_results = await asyncio.gather(*tasks)
@@ -375,6 +376,7 @@ async def background_ingest_from_blob(
     upload_id: str,
     valid_downloads: list[tuple[bytes, str, str]],
     initial_errors: list[str],
+    user_info: dict | None = None,
 ):
     try:
         results: list[Recommendation] = []
@@ -393,7 +395,7 @@ async def background_ingest_from_blob(
 
         async def sem_process(file_bytes: bytes, filename: str, blob_url: str):
             async with semaphore:
-                return await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id)
+                return await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id, user_info)
 
         tasks = [sem_process(fb, fn, bu) for fb, fn, bu in valid_downloads]
         gather_results = await asyncio.gather(*tasks)
@@ -470,6 +472,7 @@ async def background_process_chunk(
     file_bytes: bytes,
     filename: str,
     blob_url: str | None,
+    user_info: dict | None = None,
 ):
     try:
         all_existing = recommendation_store.all()
@@ -478,7 +481,7 @@ async def background_process_chunk(
             for combo in _get_combination_keys(r):
                 existing_by_combo[combo] = r
 
-        rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id)
+        rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id, user_info)
         
         # Load progress state from filesystem or local memory
         store = upload_progress_store_fs.get(upload_id) or upload_progress_store.get(upload_id)
@@ -584,6 +587,7 @@ async def background_process_chunk(
 async def ingest_files(
     response: Response,
     background_tasks: BackgroundTasks,
+    request: Request,
     files: List[UploadFile] = File(...),
     upload_id: str | None = None,
 ):
@@ -641,6 +645,13 @@ async def ingest_files(
         total_batch_size += original_size
         valid_files.append((file_bytes, filename, ext))
 
+    user_info = {
+        "uid": request.headers.get("x-user-uid", "system"),
+        "email": request.headers.get("x-user-email", "system@womgroup.com"),
+        "name": request.headers.get("x-user-name", "System"),
+        "role": request.headers.get("x-user-role", "System"),
+    }
+
     # Initialize progress for all files in the batch
     if upload_id:
         for _, filename, _ in valid_files:
@@ -661,7 +672,8 @@ async def ingest_files(
             background_ingest_files,
             upload_id,
             temp_files,
-            errors
+            errors,
+            user_info
         )
         response.status_code = status.HTTP_202_ACCEPTED
         return {"status": "accepted", "upload_id": upload_id}
@@ -673,7 +685,7 @@ async def ingest_files(
 
     async def sem_process(file_bytes: bytes, filename: str, ext: str):
         async with semaphore:
-            return await _extract_and_compress_one_file(file_bytes, filename, None, upload_id)
+            return await _extract_and_compress_one_file(file_bytes, filename, None, upload_id, user_info)
 
     tasks = [sem_process(fb, fn, ext) for fb, fn, ext in valid_files]
     gather_results = await asyncio.gather(*tasks)
@@ -727,8 +739,12 @@ async def _extract_and_compress_one_file(
     filename: str,
     blob_url: str | None,
     upload_id: str | None = None,
+    user_info: dict | None = None,
 ) -> tuple[Recommendation | None, str | None]:
     """Runs PDF compression, storage uploading, and text extraction/AI recommendation."""
+    import time
+    start_time = time.time()
+    
     update_upload_progress(upload_id, filename, _scale_pipeline_progress(5), "Starting processing...")
     ext = Path(filename).suffix.lower()
     source_type = ext.lstrip(".").upper()
@@ -791,6 +807,30 @@ async def _extract_and_compress_one_file(
             est_pages = max(1, len(extracted_text) // 1500)
             log_optimization_event(filename, original_size, original_size, bypass_di=True, pages=est_pages)
 
+        # Calculate duration
+        duration = round(time.time() - start_time, 2)
+
+        # Log activity
+        ocr_status = "executed" if is_ocr_needed else "bypassed"
+        num_pages = pages if ext == ".pdf" else (max(1, len(extracted_text) // 1500) if bypassed else pages)
+        from store import log_activity
+        log_activity(
+            request=user_info,
+            action="INGEST_FILE",
+            description=f"Ingested file: {filename} ({num_pages} pages, OCR {ocr_status})",
+            details={
+                "filename": filename,
+                "pages": num_pages,
+                "ocr_status": ocr_status,
+                "original_size": original_size,
+                "compressed_size": compressed_size,
+                "recommendation_id": recommendation.id,
+                "customer": recommendation.customer,
+                "sales_order": recommendation.salesOrder,
+                "duration": duration
+            }
+        )
+
         update_upload_progress(upload_id, filename, 100, "Completed")
         return recommendation, None
 
@@ -806,6 +846,7 @@ async def _process_one_file(
     blob_url: str | None,
     existing_by_combo: dict,
     upload_id: str | None = None,
+    user_info: dict | None = None,
 ) -> tuple[Recommendation | None, PendingDuplicate | None, str | None]:
     """
     Run the full extraction→AI→dedup pipeline for a single file.
@@ -813,7 +854,7 @@ async def _process_one_file(
     Returns (recommendation, pending_duplicate, error_message).  Exactly one
     of the three will be non-None.
     """
-    rec, err = await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id)
+    rec, err = await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id, user_info)
     if err:
         return None, None, err
     if not rec:
@@ -851,6 +892,7 @@ async def _process_one_file(
 async def ingest_chunk(
     response: Response,
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     filename: str = Form(...),
     chunk_index: int = Form(...),
@@ -924,13 +966,21 @@ async def ingest_chunk(
         else:
             return IngestResponse(processed=0, recommendations=[], pendingDuplicates=[], errors=[page_err])
 
+    user_info = {
+        "uid": request.headers.get("x-user-uid", "system"),
+        "email": request.headers.get("x-user-email", "system@womgroup.com"),
+        "name": request.headers.get("x-user-name", "System"),
+        "role": request.headers.get("x-user-role", "System"),
+    }
+
     if upload_id:
         background_tasks.add_task(
             background_process_chunk,
             upload_id,
             file_bytes,
             filename,
-            blob_url
+            blob_url,
+            user_info
         )
         response.status_code = status.HTTP_202_ACCEPTED
         return {"status": "accepted", "upload_id": upload_id}
@@ -942,7 +992,7 @@ async def ingest_chunk(
         for combo in _get_combination_keys(r):
             existing_by_combo[combo] = r
 
-    rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id)
+    rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id, user_info)
 
     return IngestResponse(
         processed=1 if rec else 0,
@@ -979,6 +1029,7 @@ async def get_upload_sas(filename: str):
 async def ingest_from_blob(
     response: Response,
     background_tasks: BackgroundTasks,
+    request: Request,
     blob_names: list[str],
     upload_id: str | None = None,
 ):
@@ -1037,6 +1088,13 @@ async def ingest_from_blob(
         blob_url = f"https://blob/{blob_name}"
         valid_downloads.append((file_bytes, blob_name, blob_url))
 
+    user_info = {
+        "uid": request.headers.get("x-user-uid", "system"),
+        "email": request.headers.get("x-user-email", "system@womgroup.com"),
+        "name": request.headers.get("x-user-name", "System"),
+        "role": request.headers.get("x-user-role", "System"),
+    }
+
     # Initialize progress for all files in the batch
     if upload_id:
         for _, filename, _ in valid_downloads:
@@ -1047,7 +1105,8 @@ async def ingest_from_blob(
             background_ingest_from_blob,
             upload_id,
             valid_downloads,
-            errors
+            errors,
+            user_info
         )
         response.status_code = status.HTTP_202_ACCEPTED
         return {"status": "accepted", "upload_id": upload_id}
@@ -1059,7 +1118,7 @@ async def ingest_from_blob(
 
     async def sem_process(file_bytes: bytes, filename: str, blob_url: str):
         async with semaphore:
-            return await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id)
+            return await _extract_and_compress_one_file(file_bytes, filename, blob_url, upload_id, user_info)
 
     tasks = [sem_process(fb, fn, bu) for fb, fn, bu in valid_downloads]
     gather_results = await asyncio.gather(*tasks)
@@ -1109,7 +1168,7 @@ async def ingest_from_blob(
     response_model=IngestResponse,
     status_code=status.HTTP_200_OK,
 )
-async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest):
+async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest, request: Request):
     """
     Apply duplicate-resolution decisions returned by ``POST /api/ingest``.
 
@@ -1132,6 +1191,15 @@ async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest):
         merged = item.newRecommendation.model_copy(update={"id": item.existingId})
         recommendation_store.add(merged)  # `.add` uses .set() — overwrites by ID
         applied.append(merged)
+        
+        # Log duplicate confirmation
+        from store import log_activity
+        log_activity(
+            request=request,
+            action="CONFIRM_DUPLICATE",
+            description=f"Confirmed duplicate and updated recommendation for {merged.sourceFile}",
+            details={"rec_id": merged.id, "source_file": merged.sourceFile}
+        )
 
     return IngestResponse(
         processed=len(applied),

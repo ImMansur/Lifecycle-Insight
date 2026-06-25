@@ -64,6 +64,8 @@ function Dashboard() {
     if (!loading) {
       if (!user) {
         navigate({ to: "/login" });
+      } else if (user.role === "Developer") {
+        navigate({ to: "/developer" });
       } else if (user.role === "Uploader") {
         navigate({ to: "/upload" });
       }

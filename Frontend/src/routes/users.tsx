@@ -50,6 +50,8 @@ function UsersPage() {
 
   const getAvatarStyles = (role: string) => {
     switch (role) {
+      case "Developer":
+        return "bg-[#EEF2FF] text-[#4F46E5] border border-[#E0E7FF]";
       case "Fleet Manager":
       case "System Administrator":
         return "bg-[#FFF0EB] text-[#FF7235] border border-[#FFE4D9]";
@@ -77,6 +79,8 @@ function UsersPage() {
     if (!loading) {
       if (!user) {
         navigate({ to: "/login" });
+      } else if (user.role === "Developer") {
+        navigate({ to: "/developer" });
       } else if (user.role !== "Fleet Manager" && user.role !== "System Administrator") {
         // Redirect non-admins out of user management
         if (user.role === "Uploader") {
@@ -96,7 +100,7 @@ function UsersPage() {
   } = useQuery({
     queryKey: ["users"],
     queryFn: fetchUsers,
-    enabled: !!user && (user.role === "Fleet Manager" || user.role === "System Administrator"),
+    enabled: !!user && (user.role === "Fleet Manager" || user.role === "System Administrator" || user.role === "Developer"),
   });
 
   const createMutation = useMutation({
@@ -209,7 +213,7 @@ function UsersPage() {
       </div>
 
       {/* Roles Explanation UI */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {/* Card 1: Fleet Manager */}
         <div className="bg-white dark:bg-slate-900 border border-border/60 p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow duration-200 space-y-4">
           <div className="flex items-center gap-4">
@@ -269,6 +273,25 @@ function UsersPage() {
               Restricted from viewing the dashboard, edit recommendation logs, and action center
               data.
             </strong>
+          </p>
+        </div>
+
+        {/* Card 4: Developer */}
+        <div className="bg-white dark:bg-slate-900 border border-border/60 p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow duration-200 space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center justify-center size-12 rounded-2xl bg-[#EEF2FF] border border-[#E0E7FF] text-[#4F46E5] shrink-0">
+              <Shield className="size-6 text-[#4F46E5]" />
+            </div>
+            <div className="leading-tight">
+              <h3 className="font-bold text-lg text-foreground">Developer</h3>
+              <span className="text-[10px] font-black uppercase tracking-[0.1em] text-[#4F46E5]">
+                SYSTEM & AUDIT CONTROL
+              </span>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Developer privileges. Access to the Developer Portal to view high-precision activity logs,
+            track active users, analyze page counts/OCR operations, inspect raw JSON metadata, and monitor system diagnostics.
           </p>
         </div>
       </div>
@@ -345,11 +368,13 @@ function UsersPage() {
                       <td className="p-4">
                         <span
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
-                            u.role === "Fleet Manager" || u.role === "System Administrator"
-                              ? "bg-[#FFF0EB] border-[#FFE4D9] text-[#FF7235]"
-                              : u.role === "Analysis"
-                                ? "bg-[#EAFDF4] border-[#D1FAE5] text-[#10B981]"
-                                : "bg-[#FEF7E0] border-[#FDE68A] text-[#D97706]"
+                            u.role === "Developer"
+                              ? "bg-[#EEF2FF] border-[#E0E7FF] text-[#4F46E5]"
+                              : u.role === "Fleet Manager" || u.role === "System Administrator"
+                                ? "bg-[#FFF0EB] border-[#FFE4D9] text-[#FF7235]"
+                                : u.role === "Analysis"
+                                  ? "bg-[#EAFDF4] border-[#D1FAE5] text-[#10B981]"
+                                  : "bg-[#FEF7E0] border-[#FDE68A] text-[#D97706]"
                           }`}
                         >
                           <Shield className="size-3" /> {u.role}
@@ -605,6 +630,43 @@ function UsersPage() {
                       </p>
                     </div>
                     {role === "Uploader" && (
+                      <div className="absolute top-4 right-4 size-5 rounded-full border-2 border-[#10B981] bg-white flex items-center justify-center shrink-0">
+                        <div className="size-2 rounded-full bg-[#10B981]" />
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Developer Card */}
+                  <button
+                    type="button"
+                    onClick={() => setRole("Developer")}
+                    className={`w-full text-left p-3.5 rounded-2xl border transition-all duration-200 flex gap-4 relative cursor-pointer ${
+                      role === "Developer"
+                        ? "bg-white dark:bg-slate-950 border-[#10B981] dark:border-emerald-500 shadow-md ring-1 ring-[#10B981]/15"
+                        : "bg-[#EAEDF0] dark:bg-slate-800/40 border-transparent hover:bg-white/60 dark:hover:bg-slate-800/60"
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center justify-center size-10 rounded-full shrink-0 ${
+                        role === "Developer"
+                          ? "bg-[#ECFDF5] text-[#10B981] dark:bg-emerald-950/40 dark:text-emerald-400"
+                          : "border border-muted-foreground/20 text-muted-foreground/60 bg-[#EAEDF0] dark:bg-slate-800"
+                      }`}
+                    >
+                      <Shield className="size-5" />
+                    </div>
+                    <div className="pr-6 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-foreground">Developer</span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-[#EEF2FF] text-[#4F46E5] border border-[#E0E7FF]">
+                          SYSTEM
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Developer control. Access the Developer Portal to view audit logs, track active users, analyze OCR pages, and check system health.
+                      </p>
+                    </div>
+                    {role === "Developer" && (
                       <div className="absolute top-4 right-4 size-5 rounded-full border-2 border-[#10B981] bg-white flex items-center justify-center shrink-0">
                         <div className="size-2 rounded-full bg-[#10B981]" />
                       </div>

@@ -7,7 +7,7 @@ import logging
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -192,7 +192,7 @@ def _make_workbook(rows: list[dict]) -> bytes:
 # ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.post("/excel")
-async def export_excel(body: ExportRequest):
+async def export_excel(body: ExportRequest, request: Request):
     """
     Generate a formatted Excel report for the given recommendation IDs.
     Enriches each record with extra CoC fields via Azure OpenAI.
@@ -228,6 +228,15 @@ async def export_excel(body: ExportRequest):
     except Exception as exc:
         logger.error("Excel generation failed: %s", exc)
         return Response(content=b"", status_code=500)
+
+    # Log the export event
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="EXCEL_EXPORT",
+        description=f"Exported {len(recs)} records to Excel sheet",
+        details={"record_count": len(recs), "record_ids": body.rec_ids}
+    )
 
     today = date.today().isoformat()
     return Response(

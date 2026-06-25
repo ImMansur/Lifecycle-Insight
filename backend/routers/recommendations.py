@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -42,8 +42,9 @@ async def get_recommendations():
     "/recommendations/{rec_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_recommendation(rec_id: str):
+async def delete_recommendation(rec_id: str, request: Request):
     """Remove a recommendation by ID."""
+    existing = recommendation_store.get(rec_id)
     removed = recommendation_store.remove(rec_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Recommendation '{rec_id}' not found.")
@@ -52,6 +53,16 @@ async def delete_recommendation(rec_id: str):
     for action in actions:
         if action.linkedRecId == rec_id:
             action_store.remove(action.id)
+
+    # Log activity
+    from store import log_activity
+    source_file = existing.sourceFile if existing else "unknown file"
+    log_activity(
+        request=request,
+        action="DELETE_RECOMMENDATION",
+        description=f"Deleted recommendation for {source_file}",
+        details={"rec_id": rec_id, "source_file": source_file}
+    )
 
 
 class BulkDeleteRequest(BaseModel):
@@ -62,11 +73,12 @@ class BulkDeleteRequest(BaseModel):
     "/recommendations/bulk-delete",
     status_code=status.HTTP_200_OK,
 )
-async def bulk_delete_recommendations(body: BulkDeleteRequest):
+async def bulk_delete_recommendations(body: BulkDeleteRequest, request: Request):
     """Remove multiple recommendations by ID. Returns counts of deleted and not-found IDs."""
     deleted: list[str] = []
     not_found: list[str] = []
     for rec_id in body.ids:
+        existing = recommendation_store.get(rec_id)
         removed = recommendation_store.remove(rec_id)
         if removed:
             deleted.append(rec_id)
@@ -76,11 +88,21 @@ async def bulk_delete_recommendations(body: BulkDeleteRequest):
                     action_store.remove(action.id)
         else:
             not_found.append(rec_id)
+
+    # Log activity
+    if deleted:
+        from store import log_activity
+        log_activity(
+            request=request,
+            action="BULK_DELETE_RECOMMENDATIONS",
+            description=f"Bulk deleted {len(deleted)} recommendations",
+            details={"deleted_ids": deleted}
+        )
     return {"deleted": len(deleted), "not_found": not_found}
 
 
 @router.patch("/recommendations/{rec_id}", response_model=Recommendation)
-async def patch_recommendation(rec_id: str, patch: PatchRecommendation):
+async def patch_recommendation(rec_id: str, patch: PatchRecommendation, request: Request):
     """Manually correct extracted fields. Marks record as reviewed (OK / High confidence)."""
     fields = patch.model_dump(exclude_none=True)
     if not fields:
@@ -123,6 +145,19 @@ async def patch_recommendation(rec_id: str, patch: PatchRecommendation):
     updated = recommendation_store.get(rec_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Could not retrieve updated record.")
+
+    # Log activity
+    from store import log_activity
+    log_activity(
+        request=request,
+        action="UPDATE_RECOMMENDATION",
+        description=f"Updated fields for recommendation: {updated.sourceFile}",
+        details={
+            "rec_id": rec_id,
+            "source_file": updated.sourceFile,
+            "updated_fields": list(fields.keys())
+        }
+    )
     return updated
 
 

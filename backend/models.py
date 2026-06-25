@@ -216,3 +216,24 @@ class CompressionLogsResponse(BaseModel):
     logs: List[CompressionLog]
     summary: CompressionLogsSummary
 
+
+# ─── User Activity Logging ──────────────────────────────────────────────────
+
+class ActivityLog(BaseModel):
+    id: str
+    userId: str
+    userEmail: str
+    userName: str
+    userRole: str
+    action: str
+    description: str
+    details: Optional[dict] = None
+    timestamp: str
+
+
+class ActivityLogEventRequest(BaseModel):
+    action: str
+    description: str
+    details: Optional[dict] = None
+
+

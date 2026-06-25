@@ -46,6 +46,13 @@ export function LoadingScreen({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tracked = progressValue !== undefined;
 
+  const onFinishedRef = useRef(onFinished);
+  const finishedCalledRef = useRef(false);
+
+  useEffect(() => {
+    onFinishedRef.current = onFinished;
+  }, [onFinished]);
+
   useEffect(() => {
     if (tracked && progressValue !== undefined) {
       maxProgressRef.current = Math.max(maxProgressRef.current, progressValue);
@@ -55,6 +62,7 @@ export function LoadingScreen({
   useEffect(() => {
     return () => {
       maxProgressRef.current = 0;
+      finishedCalledRef.current = false;
     };
   }, []);
 
@@ -80,7 +88,10 @@ export function LoadingScreen({
       setDisplayProgress((prev) => {
         if (prev >= 100) {
           if (timerRef.current) clearInterval(timerRef.current);
-          onFinished?.();
+          if (!finishedCalledRef.current) {
+            finishedCalledRef.current = true;
+            onFinishedRef.current?.();
+          }
           return 100;
         }
         return prev + (Math.random() * 20 + 5);
@@ -90,7 +101,7 @@ export function LoadingScreen({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [tracked, onFinished]);
+  }, [tracked]);
 
   const showFileList = fileProgress.length > 1;
 
