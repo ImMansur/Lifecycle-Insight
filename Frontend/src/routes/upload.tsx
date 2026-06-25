@@ -87,7 +87,13 @@ function startIngestStatusPolling(
         const status = await fetchIngestStatus(uploadId);
         onUpdate(status);
 
-        if (status.progress >= 100) {
+        const isFinished = status.progress >= 100 && (
+          !!status.result ||
+          status.status === "Failed" ||
+          status.substatus === "Completed"
+        );
+
+        if (isFinished) {
           stopped = true;
           if (status.status === "Failed") {
             rejectPromise(new Error(status.substatus || "Ingestion failed"));

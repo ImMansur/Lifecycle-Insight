@@ -88,7 +88,6 @@ def update_upload_progress(upload_id: str | None, filename: str, progress: int, 
     files = store["files"]
     if files:
         overall = sum(f["progress"] for f in files.values()) // len(files)
-        store["progress"] = overall
         
         # Build status/substatus
         completed = sum(1 for f in files.values() if f["progress"] >= 100)
@@ -96,7 +95,19 @@ def update_upload_progress(upload_id: str | None, filename: str, progress: int, 
         store["status"] = f"Processed {completed} of {total} documents"
         
         active_substatuses = [f["substatus"] for f in files.values() if f["progress"] < 100]
-        store["substatus"] = active_substatuses[0] if active_substatuses else "Finalizing..."
+        if active_substatuses:
+            store["substatus"] = active_substatuses[0]
+            store["progress"] = min(99, overall)
+        else:
+            # All individual files finished processing, but the background task is still
+            # executing database writes and preparing the final response payload.
+            # Cap progress at 98% until the orchestrator saves the final result.
+            if store.get("result") is None:
+                store["substatus"] = "Finalizing..."
+                store["progress"] = 98
+            else:
+                store["substatus"] = "Completed"
+                store["progress"] = 100
 
     upload_progress_store_fs.save(upload_id, store)
 
