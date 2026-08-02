@@ -13,7 +13,8 @@ import {
 } from "@/lib/api";
 import type { Action, ActionStatus, ActionComment } from "@/lib/api";
 import type { Recommendation } from "@/lib/wom-data";
-import { groupSerialsByPart } from "@/lib/wom-data";
+import { groupSerialsByPart, formatRecertCountdown, formatRecertUrgencyPhrase } from "@/lib/wom-data";
+import { TruncatedText } from "@/components/wom/TruncatedText";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -1113,13 +1114,7 @@ function TicketSheet({
               <CalendarClock className="size-4 mt-0.5 shrink-0" />
             )}
             <div>
-              <p className="text-sm font-semibold">
-                {isOverdue
-                  ? `Overdue by ${Math.abs(rec.monthsToRecert ?? 0)} month${Math.abs(rec.monthsToRecert ?? 0) !== 1 ? "s" : ""}`
-                  : rec.monthsToRecert != null
-                    ? `Due in ${rec.monthsToRecert} month${rec.monthsToRecert !== 1 ? "s" : ""}`
-                    : "Due soon"}
-              </p>
+              <p className="text-sm font-semibold">{formatRecertUrgencyPhrase(rec)}</p>
               {rec.recertificationDue && (
                 <p className="mt-0.5 text-xs opacity-80">
                   Recertification due: {rec.recertificationDue}
@@ -1156,6 +1151,15 @@ function TicketSheet({
                 value={rec.certificateDate}
                 icon={<CalendarClock className="size-3" />}
               />
+              {rec.applicableSpecs && (
+                <Field label="Applicable Specs" value={rec.applicableSpecs} />
+              )}
+              {rec.authorizedSignatory && (
+                <Field label="Authorized Signatory" value={rec.authorizedSignatory} />
+              )}
+              {rec.signatoryTitle && (
+                <Field label="Signatory Title" value={rec.signatoryTitle} />
+              )}
             </div>
           </section>
 
@@ -1166,6 +1170,20 @@ function TicketSheet({
             <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
               <Package className="size-3.5" /> Parts &amp; Serials
             </h3>
+            {(rec.docLotBatchNumber || rec.docExpirationDate || rec.docCureDate) && (
+              <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[11px] leading-relaxed text-foreground">
+                <span className="font-semibold uppercase tracking-wide text-primary">
+                  Document-wide note:
+                </span>{" "}
+                Certificate footer states
+                {rec.docLotBatchNumber && <> lot/batch <span className="font-medium">{rec.docLotBatchNumber}</span></>}
+                {rec.docLotBatchNumber && (rec.docExpirationDate || rec.docCureDate) && ","}
+                {rec.docExpirationDate && <> expiration <span className="font-medium">{rec.docExpirationDate}</span></>}
+                {rec.docExpirationDate && rec.docCureDate && ","}
+                {rec.docCureDate && <> cure date <span className="font-medium">{rec.docCureDate}</span></>}
+                {" "}for the certificate as a whole — not tied to a specific part below.
+              </div>
+            )}
             {(() => {
               const { groups, unattributedSerials } = groupSerialsByPart(rec);
               const totalParts = groups.length;
@@ -1204,7 +1222,7 @@ function TicketSheet({
                           </span>
                           {g.part.description && (
                             <span className="text-xs text-muted-foreground">
-                              — {g.part.description}
+                              — <TruncatedText text={g.part.description} limit={80} />
                             </span>
                           )}
                         </div>
@@ -1219,6 +1237,58 @@ function TicketSheet({
                                 {s}
                               </span>
                             ))}
+                          </div>
+                        )}
+                        {g.lotBatchNumbers.length > 0 && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                              Lot/Batch:
+                            </span>
+                            {g.lotBatchNumbers.map((s) => (
+                              <span
+                                key={s}
+                                className="rounded border border-border/60 bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                              >
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {g.expirationDate && (
+                          <div className="mt-1 text-[9px] text-muted-foreground">
+                            <span className="uppercase tracking-wide">Exp:</span> {g.expirationDate}
+                          </div>
+                        )}
+                        {g.soLotBatchExp && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                              S/O Lot &amp; Batch / Exp:
+                            </span>
+                            <span className="rounded border border-border/60 bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              {g.soLotBatchExp}
+                            </span>
+                          </div>
+                        )}
+                        {(g.invoiceNumber || g.workOrder) && (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-muted-foreground">
+                            {g.invoiceNumber && (
+                              <span>
+                                <span className="uppercase tracking-wide">Invoice:</span>{" "}
+                                <span className="font-mono">{g.invoiceNumber}</span>
+                              </span>
+                            )}
+                            {g.workOrder && (
+                              <span>
+                                <span className="uppercase tracking-wide">W.O.:</span>{" "}
+                                <span className="font-mono">{g.workOrder}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {g.specifications && (
+                          <div className="mt-1.5 border-t border-border/60 pt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                            <span className="font-semibold uppercase tracking-wide">Specs: </span>
+                            <TruncatedText text={g.specifications} limit={100} />
                           </div>
                         )}
                       </div>
@@ -1383,9 +1453,7 @@ function TicketCard({
               isOverdue ? "text-red-400/80" : "text-orange-400/80",
             )}
           >
-            {isOverdue
-              ? `${Math.abs(rec.monthsToRecert)}mo overdue`
-              : `${rec.monthsToRecert}mo remaining`}
+            {formatRecertCountdown(rec)}
           </p>
         )}
       </div>
@@ -1440,12 +1508,12 @@ function ActionCenter() {
   const { data: recsData } = useQuery({
     queryKey: ["recommendations"],
     queryFn: fetchRecommendations,
-    refetchInterval: 60_000,
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes (was 60s — too heavy on Firestore quota)
   });
   const { data: actions = [] } = useQuery({
     queryKey: ["actions"],
     queryFn: fetchActions,
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes (was 30s — too heavy on Firestore quota)
   });
 
   const recs = recsData?.recommendations ?? [];

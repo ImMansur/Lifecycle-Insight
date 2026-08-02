@@ -59,25 +59,11 @@ function LoginPage() {
       setIsLoading(true);
     } catch (err: unknown) {
       setIsSubmitting(false); // re-enable button so the user can retry
-      const code = (err as { code?: string }).code ?? "";
-      if (
-        code === "auth/invalid-credential" ||
-        code === "auth/user-not-found" ||
-        code === "auth/wrong-password"
-      ) {
+      const message = (err as Error).message || "";
+      if (message.includes("Invalid email or password")) {
         setError("Invalid email or password.");
-      } else if (code === "auth/email-already-in-use") {
-        setError("An account with this email already exists.");
-      } else if (code === "auth/too-many-requests") {
-        setError("Too many failed attempts. Please try again later.");
-      } else if (code === "auth/operation-not-allowed") {
-        setError("Sign-in is currently unavailable. Please contact your administrator.");
-      } else if (code === "auth/invalid-email") {
-        setError("Invalid email address format.");
-      } else if (code === "auth/weak-password") {
-        setError("Password is too weak. Use at least 8 characters.");
       } else {
-        setError(`Error (${code || "unknown"}): ${(err as Error).message}`);
+        setError(message || "Something went wrong. Please try again.");
       }
     }
   };

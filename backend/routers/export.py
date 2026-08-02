@@ -4,23 +4,111 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from services.excel_structurer import extract_extra_fields
 from store import recommendation_store
+from auth import CurrentUser, get_current_user
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/export", tags=["export"])
+router = APIRouter(prefix="/api/export", tags=["export"], dependencies=[Depends(get_current_user)])
 
 
 class ExportRequest(BaseModel):
     rec_ids: List[str]
+
+
+# Same placeholder-marker rule used on the frontend (wom-data.ts
+# isMeaningfulValue): a cell that literally just says "N/A" / "None" / "-" is
+# not real data and shouldn't be surfaced as if it were.
+_NA_PLACEHOLDER_RE = re.compile(r"^(n\.?/?a\.?|none|null|not applicable|-|\u2014)$", re.IGNORECASE)
+
+
+def _is_meaningful(v) -> bool:
+    if not v:
+        return False
+    v = str(v).strip()
+    return bool(v) and not _NA_PLACEHOLDER_RE.match(v)
+
+
+def _fmt_equipment(row: dict) -> str:
+    """Equipment should never be blank in the sheet. Falls back to a
+    deterministic summary of the extracted line items instead of leaving the
+    reader with nothing, when the certificate has no single top-level
+    assembly name (e.g. a plain component/replacement-parts list)."""
+    equip = row.get("equipment")
+    if equip:
+        return equip
+    line_items = row.get("lineItems") or []
+    if len(line_items) > 1:
+        return f"Multiple Components ({len(line_items)})"
+    if len(line_items) == 1:
+        desc = (line_items[0] or {}).get("description")
+        if desc:
+            return desc
+        return "1 Line Item"
+    if row.get("partNumbers"):
+        return "Various Replacement Parts"
+    return ""
+
+
+def _extracted_line_items_count(row: dict) -> int:
+    """Deterministic count of rows actually grouped by the extractor — NOT
+    the same thing as an item-numbering scheme printed on the source
+    certificate (e.g. a cert may label its rows "Items 1-12" while our
+    extractor grouped them into fewer structured lineItems). Column is
+    labeled "Extracted Line Items" precisely to avoid that ambiguity."""
+    line_items = row.get("lineItems") or []
+    if line_items:
+        return len(line_items)
+    return len(row.get("partNumbers") or [])
+
+
+def _fmt_metadata(row: dict) -> str:
+    """Batch/cure/expiry/invoice/work-order metadata, attributed per-part
+    where the source stated it per-row, plus a separately-labeled
+    document-wide note when the certificate only states batch/expiry/cure
+    once in a footer — never silently merged into a specific part's data
+    (mirrors the per-row vs. document-level distinction enforced in
+    openai_service.py)."""
+    lines: list[str] = []
+    for li in row.get("lineItems") or []:
+        if not isinstance(li, dict):
+            continue
+        part = li.get("partNumber") or li.get("description") or "?"
+        bits: list[str] = []
+        lot = [x for x in (li.get("lotBatchNumbers") or []) if _is_meaningful(x)]
+        if lot:
+            bits.append(f"batch {', '.join(lot)}")
+        if _is_meaningful(li.get("expirationDate")):
+            bits.append(f"exp {li['expirationDate']}")
+        if _is_meaningful(li.get("soLotBatchExp")):
+            bits.append(li["soLotBatchExp"])
+        if _is_meaningful(li.get("invoiceNumber")):
+            bits.append(f"invoice {li['invoiceNumber']}")
+        if _is_meaningful(li.get("workOrder")):
+            bits.append(f"W.O. {li['workOrder']}")
+        if bits:
+            lines.append(f"{part}: " + "; ".join(bits))
+
+    doc_bits: list[str] = []
+    if _is_meaningful(row.get("docLotBatchNumber")):
+        doc_bits.append(f"batch {row['docLotBatchNumber']}")
+    if _is_meaningful(row.get("docExpirationDate")):
+        doc_bits.append(f"exp {row['docExpirationDate']}")
+    if _is_meaningful(row.get("docCureDate")):
+        doc_bits.append(f"cure {row['docCureDate']}")
+    if doc_bits:
+        lines.append("Document-wide: " + "; ".join(doc_bits))
+
+    return "\n".join(lines)
 
 
 # ── openpyxl helpers ──────────────────────────────────────────────────────────
@@ -45,7 +133,8 @@ def _make_workbook(rows: list[dict]) -> bytes:
         ("Location",            20),
         ("Equipment",           32),
         ("Part Numbers",        36),
-        ("Serials",             28),
+        ("Identifiers",         28),
+        ("Metadata (Batch/Expiry/Invoice/W.O.)", 34),
         ("Certificate Date",    18),
         ("Tested Date",         16),
         ("Recert. Due",         16),
@@ -62,11 +151,10 @@ def _make_workbook(rows: list[dict]) -> bytes:
         ("Address",             32),
         ("Phone",               18),
         ("Fax",                 18),
-        ("Serialization",       28),
         ("Applicable Specs",    28),
         ("Authorized Signatory",24),
         ("Signatory Title",     22),
-        ("Total Items",         14),
+        ("Extracted Line Items", 16),
     ]
 
     # ── Header row style ────────────────────────────────────────────────────
@@ -79,7 +167,7 @@ def _make_workbook(rows: list[dict]) -> bytes:
     THIN_BORDER   = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
 
     # Column header labels
-    std_count = 19  # first 19 are standard fields
+    std_count = 20  # first 20 are standard fields
 
     for col_idx, (label, width) in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=label)
@@ -145,9 +233,10 @@ def _make_workbook(rows: list[dict]) -> bytes:
             row.get("purchaseOrder") or "",
             row.get("jobOrProject") or "",
             row.get("location") or "",
-            row.get("equipment") or "",
+            _fmt_equipment(row),
             _fmt_parts(row.get("partNumbers")),
             _fmt_list(row.get("serials")),
+            _fmt_metadata(row),
             row.get("certificateDate") or "",
             row.get("testedDate") or "",
             row.get("recertificationDue") or "",
@@ -164,11 +253,10 @@ def _make_workbook(rows: list[dict]) -> bytes:
             row.get("_extra", {}).get("address") or "",
             row.get("_extra", {}).get("phone") or "",
             row.get("_extra", {}).get("fax") or "",
-            row.get("_extra", {}).get("serialization") or "",
-            row.get("_extra", {}).get("applicableSpecs") or "",
-            row.get("_extra", {}).get("authorizedSignatory") or "",
-            row.get("_extra", {}).get("signatoryTitle") or "",
-            row.get("_extra", {}).get("totalItems") or "",
+            row.get("applicableSpecs") or "",
+            row.get("authorizedSignatory") or "",
+            row.get("signatoryTitle") or "",
+            _extracted_line_items_count(row),
         ]
 
         for col_idx, value in enumerate(values, start=1):
@@ -178,7 +266,7 @@ def _make_workbook(rows: list[dict]) -> bytes:
             if row_fill:
                 cell.fill = row_fill
 
-        ws.row_dimensions[r_idx].height = 40 if "\n" in str(values[7]) else 20
+        ws.row_dimensions[r_idx].height = 40 if "\n" in str(values[7]) or "\n" in str(values[9]) else 20
 
     # ── Freeze header + auto-filter ─────────────────────────────────────────
     ws.freeze_panes = "A2"
@@ -192,7 +280,7 @@ def _make_workbook(rows: list[dict]) -> bytes:
 # ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.post("/excel")
-async def export_excel(body: ExportRequest, request: Request):
+async def export_excel(body: ExportRequest, current_user: CurrentUser = Depends(get_current_user)):
     """
     Generate a formatted Excel report for the given recommendation IDs.
     Enriches each record with extra CoC fields via Azure OpenAI.
@@ -232,7 +320,7 @@ async def export_excel(body: ExportRequest, request: Request):
     # Log the export event
     from store import log_activity
     log_activity(
-        request=request,
+        request=current_user.to_dict(),
         action="EXCEL_EXPORT",
         description=f"Exported {len(recs)} records to Excel sheet",
         details={"record_count": len(recs), "record_ids": body.rec_ids}

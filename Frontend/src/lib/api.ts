@@ -1,5 +1,4 @@
-import type { Recommendation } from "./wom-data";
-import { auth } from "./firebase";
+import type { Recommendation, LineItem } from "./wom-data";
 
 const BASE =
   typeof window !== "undefined" &&
@@ -8,24 +7,50 @@ const BASE =
     : "";
 
 async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const currentUser = auth.currentUser;
-  const role = typeof window !== "undefined" ? localStorage.getItem("wom_user_role") || "Uploader" : "Uploader";
-  
-  const headers = {
-    ...(options.headers || {}),
-  } as Record<string, string>;
-
-  if (currentUser) {
-    headers["x-user-uid"] = currentUser.uid;
-    headers["x-user-email"] = currentUser.email || "";
-    headers["x-user-name"] = currentUser.displayName || "";
-    headers["x-user-role"] = role;
-  }
-
+  // The JWT lives in an httpOnly cookie, so the browser attaches it
+  // automatically as long as we opt in via `credentials: "include"`.
+  // No client-readable/spoofable identity headers are sent anymore.
   return fetch(url, {
     ...options,
-    headers,
+    credentials: "include",
+    headers: {
+      ...(options.headers || {}),
+    },
   });
+}
+
+export interface AuthUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: string;
+}
+
+export async function apiLogin(email: string, password: string): Promise<AuthUser> {
+  const res = await authenticatedFetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Login failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function apiLogout(): Promise<void> {
+  const res = await authenticatedFetch(`${BASE}/api/auth/logout`, { method: "POST" });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Logout failed: ${res.statusText}`);
+  }
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser | null> {
+  const res = await authenticatedFetch(`${BASE}/api/auth/me`);
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`Failed to fetch current user: ${res.statusText}`);
+  return res.json();
 }
 
 export interface Summary {
@@ -288,8 +313,16 @@ export interface RecommendationPatch {
   location?: string;
   equipment?: string;
   certificateDate?: string;
+  testedDate?: string;
+  docLotBatchNumber?: string;
+  docExpirationDate?: string;
+  docCureDate?: string;
+  applicableSpecs?: string;
+  authorizedSignatory?: string;
+  signatoryTitle?: string;
   serials?: string[];
   partNumbers?: { number: string; description: string | null; qty: number | null }[];
+  lineItems?: LineItem[];
   notes?: string;
   priority?: "High" | "Low" | "Manual review";
 }
@@ -486,6 +519,34 @@ export async function deleteUser(uid: string): Promise<void> {
   if (!res.ok && res.status !== 204) {
     throw new Error(`Failed to delete user: ${res.statusText}`);
   }
+}
+
+export async function updateUserRole(uid: string, role: string): Promise<UserProfile> {
+  const res = await authenticatedFetch(`${BASE}/api/users/${encodeURIComponent(uid)}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to update role (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+export async function fetchMySettings(): Promise<Record<string, unknown>> {
+  const res = await authenticatedFetch(`${BASE}/api/users/me/settings`);
+  if (!res.ok) throw new Error(`Failed to fetch settings: ${res.statusText}`);
+  return res.json();
+}
+
+export async function updateMySettings(settings: Record<string, unknown>): Promise<void> {
+  const res = await authenticatedFetch(`${BASE}/api/users/me/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error(`Failed to save settings: ${res.statusText}`);
 }
 
 export async function fetchUserRole(uid: string): Promise<{ role: string }> {

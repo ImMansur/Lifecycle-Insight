@@ -1,10 +1,17 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchUsers, createUser, deleteUser, type UserProfile } from "@/lib/api";
+import { fetchUsers, createUser, deleteUser, updateUserRole, type UserProfile } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -145,6 +152,25 @@ function UsersPage() {
     },
   });
 
+  const updateRoleMutation = useMutation({
+    mutationFn: ({ uid, role }: { uid: string; role: string }) => updateUserRole(uid, role),
+    onSuccess: (updatedUser) => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      addNotification({
+        fileName: "User Management",
+        status: "success",
+        message: `Updated role for ${updatedUser.displayName}: ${updatedUser.role}`,
+      });
+    },
+    onError: (err: Error) => {
+      addNotification({
+        fileName: "User Management",
+        status: "error",
+        message: `Role update failed: ${err.message}`,
+      });
+    },
+  });
+
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -178,7 +204,10 @@ function UsersPage() {
     );
   }
 
-  const displayedUsers = users.filter(u => u.role !== "Developer");
+  const displayedUsers = users.filter(u => u.role !== "Developer" && !(user?.role === "Fleet Manager" && u.role === "System Administrator"));
+
+  const canManageRoles = user?.role === "Fleet Manager" || user?.role === "System Administrator";
+  const canAssignSystemAdmin = user?.role === "System Administrator";
 
   const sortedUsers = [...displayedUsers].sort((a, b) => {
     if (a.email === "admin@womgroup.com") return -1;
@@ -349,19 +378,43 @@ function UsersPage() {
                         {u.email}
                       </td>
                       <td className="p-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
-                            u.role === "Developer"
-                              ? "bg-[#EEF2FF] border-[#E0E7FF] text-[#4F46E5]"
-                              : u.role === "Fleet Manager" || u.role === "System Administrator"
-                                ? "bg-[#FFF0EB] border-[#FFE4D9] text-[#FF7235]"
-                                : u.role === "Analysis"
-                                  ? "bg-[#EAFDF4] border-[#D1FAE5] text-[#10B981]"
-                                  : "bg-[#FEF7E0] border-[#FDE68A] text-[#D97706]"
-                          }`}
-                        >
-                          <Shield className="size-3" /> {u.role}
-                        </span>
+                        {canManageRoles && !isSelf ? (
+                          <Select
+                            value={u.role}
+                            disabled={updateRoleMutation.isPending}
+                            onValueChange={(newRole) => {
+                              if (newRole !== u.role) {
+                                updateRoleMutation.mutate({ uid: u.uid, role: newRole });
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="w-[190px] h-9 rounded-full text-xs font-bold border-border/60">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Fleet Manager">Fleet Manager</SelectItem>
+                              <SelectItem value="Analysis">Analysis</SelectItem>
+                              <SelectItem value="Uploader">Uploader</SelectItem>
+                              {canAssignSystemAdmin && (
+                                <SelectItem value="System Administrator">System Administrator</SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
+                              u.role === "Developer"
+                                ? "bg-[#EEF2FF] border-[#E0E7FF] text-[#4F46E5]"
+                                : u.role === "Fleet Manager" || u.role === "System Administrator"
+                                  ? "bg-[#FFF0EB] border-[#FFE4D9] text-[#FF7235]"
+                                  : u.role === "Analysis"
+                                    ? "bg-[#EAFDF4] border-[#D1FAE5] text-[#10B981]"
+                                    : "bg-[#FEF7E0] border-[#FDE68A] text-[#D97706]"
+                            }`}
+                          >
+                            <Shield className="size-3" /> {u.role}
+                          </span>
+                        )}
                       </td>
                       <td className="p-4 pr-6 text-right">
                         {!isSelf ? (

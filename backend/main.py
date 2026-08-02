@@ -101,11 +101,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins (internal / dev tool, no user credentials needed)
+# CORS — explicit origins + credentials required so the httpOnly JWT cookie
+# is accepted by the browser (wildcard "*" origin is incompatible with
+# allow_credentials=True per the CORS spec). In production the frontend is
+# served from the same origin as the API (see vercel.json rewrites), so this
+# mainly matters for local development where Vite runs on a different port.
+_default_dev_origins = ["http://localhost:8080", "http://127.0.0.1:8080"]
+_extra_origins = [o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+allowed_origins = _default_dev_origins + _extra_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

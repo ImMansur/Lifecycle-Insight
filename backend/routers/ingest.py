@@ -9,7 +9,7 @@ from typing import List
 
 import tempfile
 import uuid
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status, BackgroundTasks, Response, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, BackgroundTasks, Response, Request
 from pydantic import BaseModel
 
 from models import (
@@ -23,10 +23,11 @@ from services.openai_service import process_document
 from services.blob_storage import upload_file, generate_upload_sas, download_blob, stage_block, commit_blocks
 from services.page_counter import count_document_pages
 from store import recommendation_store, upload_progress_store_fs
+from auth import CurrentUser, get_current_user
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["ingest"])
+router = APIRouter(prefix="/api", tags=["ingest"], dependencies=[Depends(get_current_user)])
 
 upload_progress_store: dict[str, dict] = {}
 
@@ -598,7 +599,7 @@ async def background_process_chunk(
 async def ingest_files(
     response: Response,
     background_tasks: BackgroundTasks,
-    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
     files: List[UploadFile] = File(...),
     upload_id: str | None = None,
 ):
@@ -656,12 +657,7 @@ async def ingest_files(
         total_batch_size += original_size
         valid_files.append((file_bytes, filename, ext))
 
-    user_info = {
-        "uid": request.headers.get("x-user-uid", "system"),
-        "email": request.headers.get("x-user-email", "system@womgroup.com"),
-        "name": request.headers.get("x-user-name", "System"),
-        "role": request.headers.get("x-user-role", "System"),
-    }
+    user_info = current_user.to_dict()
 
     # Initialize progress for all files in the batch
     if upload_id:
@@ -903,7 +899,7 @@ async def _process_one_file(
 async def ingest_chunk(
     response: Response,
     background_tasks: BackgroundTasks,
-    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
     file: UploadFile = File(...),
     filename: str = Form(...),
     chunk_index: int = Form(...),
@@ -977,12 +973,7 @@ async def ingest_chunk(
         else:
             return IngestResponse(processed=0, recommendations=[], pendingDuplicates=[], errors=[page_err])
 
-    user_info = {
-        "uid": request.headers.get("x-user-uid", "system"),
-        "email": request.headers.get("x-user-email", "system@womgroup.com"),
-        "name": request.headers.get("x-user-name", "System"),
-        "role": request.headers.get("x-user-role", "System"),
-    }
+    user_info = current_user.to_dict()
 
     if upload_id:
         background_tasks.add_task(
@@ -1040,8 +1031,8 @@ async def get_upload_sas(filename: str):
 async def ingest_from_blob(
     response: Response,
     background_tasks: BackgroundTasks,
-    request: Request,
     blob_names: list[str],
+    current_user: CurrentUser = Depends(get_current_user),
     upload_id: str | None = None,
 ):
     """
@@ -1099,12 +1090,7 @@ async def ingest_from_blob(
         blob_url = f"https://blob/{blob_name}"
         valid_downloads.append((file_bytes, blob_name, blob_url))
 
-    user_info = {
-        "uid": request.headers.get("x-user-uid", "system"),
-        "email": request.headers.get("x-user-email", "system@womgroup.com"),
-        "name": request.headers.get("x-user-name", "System"),
-        "role": request.headers.get("x-user-role", "System"),
-    }
+    user_info = current_user.to_dict()
 
     # Initialize progress for all files in the batch
     if upload_id:
@@ -1179,7 +1165,7 @@ async def ingest_from_blob(
     response_model=IngestResponse,
     status_code=status.HTTP_200_OK,
 )
-async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest, request: Request):
+async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest, current_user: CurrentUser = Depends(get_current_user)):
     """
     Apply duplicate-resolution decisions returned by ``POST /api/ingest``.
 
@@ -1206,7 +1192,7 @@ async def confirm_ingest_duplicates(payload: ConfirmDuplicatesRequest, request: 
         # Log duplicate confirmation
         from store import log_activity
         log_activity(
-            request=request,
+            request=current_user.to_dict(),
             action="CONFIRM_DUPLICATE",
             description=f"Confirmed duplicate and updated recommendation for {merged.sourceFile}",
             details={"rec_id": merged.id, "source_file": merged.sourceFile}

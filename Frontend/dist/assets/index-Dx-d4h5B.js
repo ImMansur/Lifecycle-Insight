@@ -1,0 +1,1 @@
+import{k as u}from"./vendor-tanstack-D9dG8olD.js";function o(r){const e=u.useRef({value:r,previous:r});return u.useMemo(()=>(e.current.value!==r&&(e.current.previous=e.current.value,e.current.value=r),e.current.previous),[r])}export{o as u};

@@ -83,21 +83,21 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="group flex items-center gap-3 px-3 py-2 rounded-2xl cursor-pointer border border-transparent hover:border-border/40 hover:bg-secondary/60 hover:shadow-sm transition-all focus:outline-none">
-          <Avatar className="size-9 border border-border bg-primary/10 transition-transform group-hover:scale-105">
+        <button className="group flex items-center gap-3 px-3 py-2 rounded-full cursor-pointer border border-transparent hover:border-border/40 hover:bg-secondary/60 transition-all focus:outline-none">
+          <Avatar className="size-9 border border-border bg-primary/10">
             <AvatarFallback className="bg-primary/10 text-primary text-xs font-bold">
               {initials}
             </AvatarFallback>
           </Avatar>
           <div className="hidden sm:flex flex-col text-left leading-tight">
-            <div className="text-sm font-bold text-foreground group-hover:text-primary transition-colors">
+            <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
               {user.displayName ?? "Admin"}
             </div>
-            <div className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest">
+            <div className="text-[11px] font-medium text-muted-foreground/60">
               {(user as any).role ?? "Fleet Manager"}
             </div>
           </div>
-          <ChevronDown className="hidden sm:block size-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-all group-hover:translate-y-0.5" />
+          <ChevronDown className="hidden sm:block size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 bg-surface border-border">
@@ -255,21 +255,20 @@ function AppLayout() {
       </div>
 
       <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl relative">
-        <div className="mx-auto flex h-20 max-w-[1600px] items-center gap-8 px-6">
-          <div className="flex items-center gap-5">
-            <div className="relative size-14 shrink-0 overflow-hidden rounded-full border-2 border-primary/20 bg-white shadow-xl shadow-primary/10 transition-all hover:scale-110 hover:shadow-primary/20">
-              <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 to-transparent" />
+        <div className="mx-auto flex h-[70px] max-w-[1600px] items-center gap-7 px-6">
+          <div className="flex items-center gap-3.5">
+            <div className="relative size-11 shrink-0 overflow-hidden rounded-full border border-primary/20 bg-white shadow-sm transition-transform hover:scale-105">
               <img
                 src="/logo.png"
                 alt="WOM Logo"
-                className="relative z-10 size-full object-contain p-1.5"
+                className="relative z-10 size-full object-contain p-1"
               />
             </div>
             <div className="leading-tight">
-              <div className="font-display text-lg font-black tracking-tight text-accent">
+              <div className="font-display text-lg font-bold tracking-tight text-accent">
                 WOM <span className="text-primary">Lifecycle</span>
               </div>
-              <div className="font-mono text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/80">
+              <div className="font-mono text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/60">
                 Worldwide Oilfield Machine
               </div>
             </div>
@@ -278,11 +277,11 @@ function AppLayout() {
           {user.role !== "Developer" && (
             <nav
               ref={containerRef}
-              className="relative mx-auto hidden items-center gap-1 rounded-full bg-secondary/80 p-1.5 backdrop-blur-sm md:flex"
+              className="relative mx-auto hidden items-center gap-0.5 rounded-full bg-secondary/50 p-1.5 md:flex"
             >
               {coords.width > 0 && (
                 <div
-                  className="absolute top-1.5 bottom-1.5 bg-primary rounded-full transition-all duration-300 ease-in-out shadow-md shadow-primary/25"
+                  className="absolute top-1.5 bottom-1.5 bg-primary rounded-full transition-all duration-300 ease-in-out shadow-sm"
                   style={{
                     left: `${coords.left}px`,
                     width: `${coords.width}px`,
@@ -315,8 +314,8 @@ function AppLayout() {
                       itemRefs.current[item.id] = el;
                     }}
                     className={cn(
-                      "relative z-10 rounded-full px-6 py-2 text-sm font-semibold transition-colors duration-300",
-                      active ? "text-white" : "text-muted-foreground hover:text-foreground",
+                      "relative z-10 rounded-full px-5 py-2 text-base font-medium transition-colors duration-300",
+                      active ? "text-white font-semibold" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
                     {item.label}
@@ -326,16 +325,16 @@ function AppLayout() {
             </nav>
           )}
 
-          <div className="ml-auto flex items-center gap-6">
+          <div className="ml-auto flex items-center gap-3.5">
             {user.role !== "Developer" && (
               <>
                 <div className="hidden sm:flex items-center gap-2">
                   <NotificationBell />
                 </div>
-                <div className="h-8 w-px bg-border/50 hidden sm:block" />
+                <div className="h-6 w-px bg-border/50 hidden sm:block" />
               </>
             )}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center">
               <UserMenu onSignOut={() => setShowSignOutLoading(true)} />
             </div>
           </div>

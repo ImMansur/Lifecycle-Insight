@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Recommendation } from "@/lib/wom-data";
-import { getEquipmentNames } from "@/lib/wom-data";
+import { getEquipmentNames, formatRecertCountdown } from "@/lib/wom-data";
 import { PriorityChip } from "./StatusBadge";
 import { RecommendationDetail } from "./RecommendationDetail";
 import {
@@ -255,9 +255,7 @@ export function QuotesTab({
                     </div>
                     {r.monthsToRecert !== null && (
                       <div className="text-muted-foreground text-[10px] mt-0.5">
-                        {r.monthsToRecert < 0
-                          ? `${Math.abs(r.monthsToRecert)} mo overdue`
-                          : `In ${r.monthsToRecert} mo`}
+                        {formatRecertCountdown(r)}
                       </div>
                     )}
                   </div>

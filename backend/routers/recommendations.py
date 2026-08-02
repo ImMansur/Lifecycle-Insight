@@ -6,21 +6,52 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from models import Recommendation, RecommendationsResponse, Summary, PatchRecommendation
+from models import Recommendation, RecommendationsResponse, Summary, PatchRecommendation, PartEntry, LineItem
 from store import recommendation_store, action_store
-from services.openai_service import _compute_lifecycle_fields
+from services.openai_service import _compute_lifecycle_fields, _build_recommendation_text
+from auth import CurrentUser, get_current_user
 
-router = APIRouter(prefix="/api", tags=["recommendations"])
+router = APIRouter(prefix="/api", tags=["recommendations"], dependencies=[Depends(get_current_user)])
+
+
+def _with_fresh_lifecycle(rec: Recommendation) -> Recommendation:
+    """Recompute time-sensitive lifecycle fields (recertificationDue, ageMonths,
+    monthsToRecert, status, priority, recommendation text) against *today's* date.
+
+    These fields are derived purely from `certificateDate` + the current date, but
+    were previously only computed once at ingestion (or manual edit) time and then
+    stored as-is. As real time passes, a record that was "due soon" at ingestion
+    silently becomes overdue without ever being recalculated, so the UI kept
+    showing stale statuses/countdowns. Recomputing on every read keeps them
+    accurate without mutating the stored record.
+    """
+    lifecycle = _compute_lifecycle_fields(rec.certificateDate)
+    merged_data = rec.model_dump()
+    rec_text, invoice_basis = _build_recommendation_text(rec.id, merged_data, lifecycle)
+
+    updates = {
+        "recertificationDue": lifecycle.get("recertificationDue"),
+        "ageMonths": lifecycle.get("ageMonths"),
+        "monthsToRecert": lifecycle.get("monthsToRecert"),
+        "daysToRecert": lifecycle.get("daysToRecert"),
+        "status": lifecycle.get("status"),
+        "priority": lifecycle.get("priority"),
+        "lifecycleDate": lifecycle.get("lifecycleDate"),
+        "recommendation": rec_text,
+    }
+    if invoice_basis:
+        updates["invoiceBasis"] = invoice_basis
+    return rec.model_copy(update=updates)
 
 
 @router.get("/recommendations", response_model=RecommendationsResponse)
 async def get_recommendations():
     """Return all stored recommendations with a computed summary."""
-    recs = recommendation_store.all()
+    recs = [_with_fresh_lifecycle(r) for r in recommendation_store.all()]
 
     total = len(recs)
     ok = sum(1 for r in recs if r.extractionStatus == "OK")
@@ -42,7 +73,7 @@ async def get_recommendations():
     "/recommendations/{rec_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_recommendation(rec_id: str, request: Request):
+async def delete_recommendation(rec_id: str, current_user: CurrentUser = Depends(get_current_user)):
     """Remove a recommendation by ID."""
     existing = recommendation_store.get(rec_id)
     removed = recommendation_store.remove(rec_id)
@@ -58,7 +89,7 @@ async def delete_recommendation(rec_id: str, request: Request):
     from store import log_activity
     source_file = existing.sourceFile if existing else "unknown file"
     log_activity(
-        request=request,
+        request=current_user.to_dict(),
         action="DELETE_RECOMMENDATION",
         description=f"Deleted recommendation for {source_file}",
         details={"rec_id": rec_id, "source_file": source_file}
@@ -73,7 +104,7 @@ class BulkDeleteRequest(BaseModel):
     "/recommendations/bulk-delete",
     status_code=status.HTTP_200_OK,
 )
-async def bulk_delete_recommendations(body: BulkDeleteRequest, request: Request):
+async def bulk_delete_recommendations(body: BulkDeleteRequest, current_user: CurrentUser = Depends(get_current_user)):
     """Remove multiple recommendations by ID. Returns counts of deleted and not-found IDs."""
     deleted: list[str] = []
     not_found: list[str] = []
@@ -93,7 +124,7 @@ async def bulk_delete_recommendations(body: BulkDeleteRequest, request: Request)
     if deleted:
         from store import log_activity
         log_activity(
-            request=request,
+            request=current_user.to_dict(),
             action="BULK_DELETE_RECOMMENDATIONS",
             description=f"Bulk deleted {len(deleted)} recommendations",
             details={"deleted_ids": deleted}
@@ -102,7 +133,7 @@ async def bulk_delete_recommendations(body: BulkDeleteRequest, request: Request)
 
 
 @router.patch("/recommendations/{rec_id}", response_model=Recommendation)
-async def patch_recommendation(rec_id: str, patch: PatchRecommendation, request: Request):
+async def patch_recommendation(rec_id: str, patch: PatchRecommendation, current_user: CurrentUser = Depends(get_current_user)):
     """Manually correct extracted fields. Marks record as reviewed (OK / High confidence)."""
     fields = patch.model_dump(exclude_none=True)
     if not fields:
@@ -111,6 +142,34 @@ async def patch_recommendation(rec_id: str, patch: PatchRecommendation, request:
     # Serialize nested models (PartEntry list) for Firestore
     if "partNumbers" in fields:
         fields["partNumbers"] = [p.model_dump() for p in (patch.partNumbers or [])]
+
+    # lineItems is the source of truth for the part ↔ serial relationship.
+    # When the admin edits it, re-derive the legacy flat partNumbers/serials
+    # arrays from it (same logic used at ingestion time) so older screens
+    # that still read those flat arrays stay in sync instead of showing
+    # stale data next to the freshly-edited line items.
+    if "lineItems" in fields:
+        line_items = patch.lineItems or []
+        fields["lineItems"] = [li.model_dump() for li in line_items]
+
+        derived_parts: list[dict] = []
+        seen_parts: set[str] = set()
+        for li in line_items:
+            if li.partNumber and li.partNumber not in seen_parts:
+                derived_parts.append(
+                    PartEntry(number=li.partNumber, description=li.description, qty=li.qty).model_dump()
+                )
+                seen_parts.add(li.partNumber)
+        fields["partNumbers"] = derived_parts
+
+        derived_serials: list[str] = []
+        seen_serials: set[str] = set()
+        for li in line_items:
+            for s in li.serials:
+                if s and s not in seen_serials:
+                    derived_serials.append(s)
+                    seen_serials.add(s)
+        fields["serials"] = derived_serials
 
     # Mark as manually reviewed once admin saves corrections
     fields["extractionStatus"] = "OK"
@@ -135,7 +194,15 @@ async def patch_recommendation(rec_id: str, patch: PatchRecommendation, request:
     if invoice_basis:
         fields["invoiceBasis"] = invoice_basis
 
-    for key in ("recertificationDue", "ageMonths", "monthsToRecert", "status", "priority", "lifecycleDate"):
+    for key in (
+        "recertificationDue",
+        "ageMonths",
+        "monthsToRecert",
+        "daysToRecert",
+        "status",
+        "priority",
+        "lifecycleDate",
+    ):
         fields[key] = lifecycle.get(key)
 
     success = recommendation_store.update(rec_id, fields)
@@ -149,7 +216,7 @@ async def patch_recommendation(rec_id: str, patch: PatchRecommendation, request:
     # Log activity
     from store import log_activity
     log_activity(
-        request=request,
+        request=current_user.to_dict(),
         action="UPDATE_RECOMMENDATION",
         description=f"Updated fields for recommendation: {updated.sourceFile}",
         details={

@@ -25,7 +25,11 @@ Extract the following fields (use null when not found):
 - customer: full customer name as printed on the CoC
 - salesOrder: W.O.M. sales order number
 - purchaseOrder: customer purchase order number
-- jobOrProject: rig name, project name, or job reference
+- jobOrProject: rig name, project name, or job reference. Do NOT put standards,
+  specifications, or compliance codes here (e.g. "API 16A 4th Edition",
+  "API 6A", "NACE MR-01-75", "ISO 15156") — those belong in each line item's
+  "specifications" field, never in jobOrProject. Use null if no actual rig/
+  project/job name or reference is stated.
 - location: physical site, city, country, or geographic location where the equipment is deployed or the work was performed (e.g. "Aberdeen, UK", "Gulf of Mexico", "Stavanger, Norway"). Use null if no location is stated.
 - equipment: the top-level assembly / product name being certified — e.g.
   "15,000 PSI W.P. CHOKE & KILL MANIFOLD", "WOM TYPE WU 11\" 15K SINGLE GATE VALVE",
@@ -42,19 +46,107 @@ Extract the following fields (use null when not found):
     - "description": the description / product name for this row, or null
     - "partNumber": the part number / model number / WOM item code for this row, or null
     - "qty": integer quantity for this row, or null if not stated
-    - "serials": array of serial numbers / lot numbers belonging to THIS specific
-      part. If the cert lists "EQUIPMENT SERIAL NO: A-28717" alongside
+    - "serials": array of TRUE unit serial numbers belonging to THIS specific
+      part (e.g. values under an "EQUIPMENT SERIAL NO." or "SERIALIZATION"
+      column/label). If the cert lists "EQUIPMENT SERIAL NO: A-28717" alongside
       "PART NO: M4800 QUANTITY: 1", then A-28717 belongs to M4800.
-      Use [] if no serials are listed for this row.
+      Do NOT put lot numbers, batch numbers, or expiration dates here.
+      Use [] if no true serial numbers are listed for this row.
+    - "lotBatchNumbers": array of lot numbers / batch numbers for THIS row,
+      ONLY when the source table shows lot/batch as its OWN separate column
+      (e.g. a "Lot / Batch No." column that is distinct from any serialization
+      or expiration column). Use [] if none, or if this document instead uses
+      the combined-column format described below.
+    - "expirationDate": the expiration date, cure date, or shelf-life code for
+      THIS row, ONLY when the source table shows it as its OWN separate column
+      (e.g. a distinct "Expiration Date" column). Use null if none, or if this
+      document instead uses the combined-column format described below.
+    - "soLotBatchExp": some CoC templates print sales-order / lot-batch /
+      expiration TOGETHER as ONE combined column, e.g. a header like
+      "S/O LOT & BATCH / EXP." with values such as "23810 / 4249260-12 / 3Q17"
+      or "N/A / 5466 / NO EXP". When you see this combined-column pattern, do
+      NOT split or reinterpret it — copy the entire cell value for THIS row
+      exactly as printed (keep the "/" separators, "N/A", "NO EXP", etc.)
+      into "soLotBatchExp". Leave "lotBatchNumbers": [] and
+      "expirationDate": null for that row in this case, since the source
+      document intentionally keeps these values combined. Use null for
+      "soLotBatchExp" if this document does not use this combined-column format.
+    - "specifications": some CoC templates print a technical ratings/spec
+      block (rated working pressure, design temperature, NACE/sour-service
+      compliance, H2S/CO2/chloride/pH limits, elemental sulphur, etc.)
+      directly below the equipment description — visually separated by a
+      blank line and/or occupying its own wrapped table row(s), distinct
+      from the actual product description sentence(s). This is a SEPARATE
+      field from "description" — never append, merge, or fold this ratings
+      text into "description". Use null if this row has no such block.
+    - "invoiceNumber": an invoice number stated for THIS specific row, ONLY
+      when the source table shows it as its own distinct column (e.g. a
+      "Invoice No." column). Use null if not stated per-row. Do NOT confuse
+      with the document-level salesOrder/purchaseOrder.
+    - "workOrder": a work order / W.O. reference stated for THIS specific
+      row, ONLY when the source table shows it as its own distinct column
+      (e.g. a "Work Order" or "W.O." column). Use null if not stated per-row.
   Scan the entire document top-to-bottom across all pages; never stop at the first row or first page.
+
+  IMPORTANT — the document text may include a "---CONFIRMED LINE ITEMS---"
+  section produced by deterministic layout/table analysis, e.g.:
+  "Item 1: partNumber=SW-0998 | qty=1 | description=RETAINER, SEAT | serial=102136395"
+  or "Item 2: partNumber=W-18492-90 | qty=1 | description=O-RING | soLotBatchExp=23810 / 4249260-12 / 3Q17".
+  When present, treat each "Item N" entry as AUTHORITATIVE for that lineItem's
+  partNumber, qty, row grouping, and any serial/lotBatch/expiration/
+  soLotBatchExp/invoice/workOrder/specifications values shown — use those
+  exact values verbatim, do not split one Item into multiple lineItems, do
+  not merge two Items into one, and do not re-derive or reinterpret the
+  values shown. Specifically:
+    - "serial=VALUE" → put VALUE into that item's "serials" array.
+    - "lotBatch=VALUE" → put VALUE into that item's "lotBatchNumbers" array.
+    - "expiration=VALUE" → put VALUE into that item's "expirationDate".
+    - "soLotBatchExp=VALUE" → put VALUE verbatim into that item's
+      "soLotBatchExp", and leave "lotBatchNumbers": [] / "expirationDate": null
+      for that row.
+    - "invoice=VALUE" → put VALUE into that item's "invoiceNumber".
+    - "workOrder=VALUE" → put VALUE into that item's "workOrder".
+    - "specifications=VALUE" → put VALUE verbatim into that item's
+      "specifications" field. Do NOT copy this text into "description" as well.
+  If an item's description shows
+  "(MISSING — find matching text in document)", search the rest of the plain
+  document text (matching items in the same top-to-bottom order as the
+  CONFIRMED LINE ITEMS list) for the real descriptive phrase — specs,
+  material, dimensions, product name — that belongs to that item, and use it
+  as the description. Never use a part number, index, or reference number as
+  the description; if genuinely no description text exists, use null.
+  If no "---CONFIRMED LINE ITEMS---" section is present, fall back to
+  inferring line items directly from the plain text: lines that do not begin
+  a new item/quantity/part-number entry are continuations of the previous
+  line item, not new ones.
 - partNumbers: array of objects (legacy flat list, used as a fallback when
   lineItems cannot be grouped). Each: { "number", "description", "qty" }.
   You may leave this empty if lineItems is populated.
-- serials: array of any serial / lot / heat numbers that could NOT be
-  attributed to a specific line item (e.g. reference standards like MR-01-75).
+- serials: array of any TRUE serial numbers that could NOT be attributed to a
+  specific line item (e.g. reference standards like MR-01-75).
   Per-part serials should go inside lineItems[*].serials, not here.
+- docLotBatchNumber: a lot/batch number stated ONCE for the whole document
+  (e.g. in a footer/summary note like "B# 191218, CD: 2018Q4, EXP: 2025Q4",
+  the "B#" value), when it is NOT tied to a specific line item row. Use null
+  if there is no such document-level note, or if lot/batch info is already
+  captured per-row in lineItems.
+- docExpirationDate: the expiration date from that same kind of document-level
+  footer/summary note (e.g. the "EXP:" value), or null.
+- docCureDate: the cure date from that same kind of document-level
+  footer/summary note (e.g. the "CD:" value), or null.
 - certificateDate: ISO date (YYYY-MM-DD) from "Certificate Date" or "Date" field
 - testedDate: ISO date (YYYY-MM-DD) from "Test Date" or "Tested Date" field, else null
+- applicableSpecs: the document-level standards/specifications the certificate
+  states the equipment conforms to (e.g. "API 6A, API 16A 4th Edition, NACE
+  MR0175 / ISO 15156"), as a single comma-separated string verbatim from the
+  document. This is the certificate's overall compliance statement — NOT the
+  same as a line item's per-part "specifications" (ratings/pressure/temperature
+  block). Use null if no such statement exists.
+- authorizedSignatory: the printed name of the person who signed / authorized
+  the certificate (e.g. under "Authorized By", "Approved By", "Signature").
+  Use null if no name is printed.
+- signatoryTitle: the job title printed alongside the authorized signatory's
+  name (e.g. "Quality Manager", "QA/QC Inspector"). Use null if none is printed.
 - textPreview: first ~2000 characters of meaningful document text (a concise excerpt, preserving as much structure as possible)
 - confidence: "High" if you extracted customer + salesOrder + certificateDate, else "Low"
 - notes: any caveats, document format issues, or special observations (string or null)
@@ -66,6 +158,7 @@ RULES:
 4. Do not invent data. If a field is not present, use null or [].
 5. If the document is NOT a Certificate of Conformance (CoC) or does not contain equipment manufacturing, inspection, or testing data (e.g. it is a generic town/region fact sheet, news article, marketing brochure, etc.), you MUST set all fields (except textPreview and notes) to null, and write a clear explanation in the "notes" field (e.g., "Document is a fact sheet, not a Certificate of Conformance. No certificate metadata found.").
 6. If the document contains multiple Certificate of Conformance sheets, pages, or a primary certificate followed by secondary certificates, component lists, or annexes (even with different dates, sales orders, or headers on subsequent pages), you MUST scan all pages and extract all parts and line items from ALL sections and pages. Merge all extracted parts into the single 'lineItems' list. For the top-level metadata fields (customer, salesOrder, purchaseOrder, certificateDate), use the values from the primary/first certificate sheet.
+7. "null" and "N/A" mean different things — do not conflate them. Use null ONLY when a labeled field is entirely absent from the document (the label itself is never printed). If the document explicitly prints a label with an explicit not-applicable marker as its value (e.g. "Job No.: N/A", "Location: N/A", "PO#: None"), return that literal marker string (e.g. "N/A", "None") for the field instead of null — this reflects what the document actually states rather than hiding it.
 """.strip()
 
 _USER_TEMPLATE = """
@@ -77,7 +170,7 @@ Filename: {filename}
 
 
 def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
-    """Compute recertificationDue, ageMonths, monthsToRecert, status, priority."""
+    """Compute recertificationDue, ageMonths, monthsToRecert, daysToRecert, status, priority."""
     today = date.today()
 
     if not cert_date_str:
@@ -86,6 +179,7 @@ def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
             "recertificationDue": None,
             "ageMonths": None,
             "monthsToRecert": None,
+            "daysToRecert": None,
             "status": "Manual review",
             "priority": "Manual review",
         }
@@ -98,6 +192,7 @@ def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
             "recertificationDue": None,
             "ageMonths": None,
             "monthsToRecert": None,
+            "daysToRecert": None,
             "status": "Manual review",
             "priority": "Manual review",
         }
@@ -110,14 +205,23 @@ def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
     months_to_recert = (
         (recert_date.year - today.year) * 12 + (recert_date.month - today.month)
     )
+    # Exact day-level precision — this is the source of truth for
+    # overdue/status classification. `months_to_recert` is only a coarse
+    # calendar-month difference (ignores day-of-month), so a record that's a
+    # few days overdue *within the current month* would otherwise still
+    # compute to 0 and be misclassified as "not yet due". `daysToRecert` is
+    # also used by the UI to show "in N days" / "N days overdue" instead of
+    # the misleading "in 0 mo" when the recertification date falls within
+    # the current calendar month.
+    days_to_recert = (recert_date - today).days
 
-    if months_to_recert < 0:
+    if days_to_recert < 0:
         status = "Expired / overdue"
         priority: str = "High"
-    elif months_to_recert <= 12:
+    elif days_to_recert <= 365:
         status = "Due within 12 months"
         priority = "High"
-    elif months_to_recert <= 24:
+    elif days_to_recert <= 730:
         status = "Mid-cycle service opportunity"
         priority = "Low"
     else:
@@ -129,6 +233,7 @@ def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
         "recertificationDue": recert_date.isoformat(),
         "ageMonths": age_months,
         "monthsToRecert": months_to_recert,
+        "daysToRecert": days_to_recert,
         "status": status,
         "priority": priority,
     }
@@ -137,6 +242,27 @@ def _compute_lifecycle_fields(cert_date_str: str | None) -> dict[str, Any]:
 _OPENAI_MAX_RETRIES = int(os.environ.get("OPENAI_MAX_RETRIES", "5"))
 _OPENAI_BACKOFF_BASE = float(os.environ.get("OPENAI_BACKOFF_BASE", "1.0"))
 _OPENAI_CHUNK_CHARS = int(os.environ.get("OPENAI_CHUNK_CHARS", "25000"))
+
+
+def _overdue_magnitude_text(lifecycle: dict[str, Any]) -> str:
+    """Human-readable "how far overdue" phrase, e.g. "30 months" or "12 days".
+
+    Mirrors the frontend's `recertMagnitude` logic: `monthsToRecert` is a
+    coarse whole-calendar-month figure, so something that's overdue by only
+    a few days within the current month would otherwise round down to "0
+    months" and read as if nothing is wrong. Fall back to exact days in
+    that case.
+    """
+    months = lifecycle.get("monthsToRecert")
+    days = lifecycle.get("daysToRecert")
+    if days is None:
+        return "past due"
+    overdue_days = -days
+    if months is not None and months < 0:
+        n = abs(months)
+        if n >= 1:
+            return f"{n} month{'s' if n != 1 else ''}"
+    return f"{overdue_days} day{'s' if overdue_days != 1 else ''}"
 
 
 def _build_recommendation_text(rec_id: str, data: dict[str, Any], lifecycle: dict[str, Any]) -> str:
@@ -167,12 +293,25 @@ def _build_recommendation_text(rec_id: str, data: dict[str, Any], lifecycle: dic
     if not lifecycle.get("recertificationDue"):
         rec_text = "No recommendation available: certificate date not found."
     elif status == "Expired / overdue":
-        action = "create recertification and aftermarket sales lead now"
         category = _guess_equipment_category(equip)
+        magnitude = _overdue_magnitude_text(lifecycle)
+        order_ref_parts = []
+        real_so = data.get("salesOrder")
+        real_po = data.get("purchaseOrder")
+        if real_so:
+            order_ref_parts.append(f"Sales Order {real_so}")
+        if real_po:
+            order_ref_parts.append(f"PO {real_po}")
+        order_clause = (
+            f" {' and '.join(order_ref_parts)} can be used as the starting point for a quotation."
+            if order_ref_parts
+            else " Use the extracted customer/order/BOM data as the starting point for a quotation."
+        )
         rec_text = (
-            f"{category}{location_clause}: {action}. CoC date is {cert} and the 5-year "
-            f"recertification date is {recert}. Use extracted customer/order/BOM "
-            f"data as the starting point for invoice or quote review."
+            f"{category}{location_clause} is {magnitude} beyond its 5-year recertification "
+            f"due date (recertification was due {recert}). Recommend contacting the customer "
+            f"to initiate recertification and review replacement/service opportunities."
+            f"{order_clause}"
         )
     elif status == "Due within 12 months":
         rec_text = (
@@ -322,7 +461,7 @@ async def process_document(
                         {"role": "user", "content": user_msg},
                     ],
                     temperature=0,
-                    max_tokens=4096,
+                    max_tokens=16000,
                     response_format={"type": "json_object"},
                 )
                 raw_json = response.choices[0].message.content or "{}"
@@ -409,12 +548,51 @@ async def process_document(
             qty = None
         raw_serials = li.get("serials") or []
         serials_for_row = [str(s).strip() for s in raw_serials if str(s).strip()]
+        raw_lot_batch = li.get("lotBatchNumbers") or []
+        lot_batch_for_row = [str(s).strip() for s in raw_lot_batch if str(s).strip()]
+        expiration_for_row = str(li.get("expirationDate") or "").strip() or None
+        so_lot_batch_exp_for_row = str(li.get("soLotBatchExp") or "").strip() or None
+        specifications_for_row = str(li.get("specifications") or "").strip() or None
+        invoice_for_row = str(li.get("invoiceNumber") or "").strip() or None
+        work_order_for_row = str(li.get("workOrder") or "").strip() or None
+        description = str(li.get("description") or "").strip() or None
+        part_number = str(li.get("partNumber") or "").strip() or None
+        # Defensive guard: skip fully-empty rows (e.g. artifacts from JSON
+        # truncation-recovery on very large responses) rather than emitting
+        # a bogus blank line item.
+        if (
+            not description and not part_number and qty is None
+            and not serials_for_row and not lot_batch_for_row and not expiration_for_row
+            and not so_lot_batch_exp_for_row and not specifications_for_row
+            and not invoice_for_row and not work_order_for_row
+        ):
+            continue
         line_items.append(LineItem(
-            description=str(li.get("description") or "").strip() or None,
-            partNumber=str(li.get("partNumber") or "").strip() or None,
+            description=description,
+            partNumber=part_number,
             qty=qty,
             serials=serials_for_row,
+            lotBatchNumbers=lot_batch_for_row,
+            expirationDate=expiration_for_row,
+            soLotBatchExp=so_lot_batch_exp_for_row,
+            specifications=specifications_for_row,
+            invoiceNumber=invoice_for_row,
+            workOrder=work_order_for_row,
         ))
+
+    # Document-level metadata: some CoC templates only state batch/cure/
+    # expiration info ONCE, in a footer/summary note that applies to the
+    # certificate as a whole rather than to any single row. This is kept as
+    # separate document-level fields (below) instead of being copied onto
+    # every line item — extraction stays faithful to what the source table
+    # actually states per row (explicit per-row columns, or the immediately
+    # preceding row for a wrapped continuation), and the UI decides whether
+    # to surface this note alongside all parts. If WOM later confirms this
+    # note should always apply document-wide, that display rule belongs in
+    # the frontend, not baked into per-row data here.
+    doc_lot_batch_number = str(data.get("docLotBatchNumber") or "").strip() or None
+    doc_expiration_date = str(data.get("docExpirationDate") or "").strip() or None
+    doc_cure_date = str(data.get("docCureDate") or "").strip() or None
 
     raw_parts = data.get("partNumbers") or []
     part_numbers: list[PartEntry] = []
@@ -460,12 +638,18 @@ async def process_document(
                 seen_s.add(s)
         serials = merged_serials
     elif part_numbers:
+        # Legacy-fallback line items synthesized from the flat partNumbers
+        # list (no per-row lot/batch/expiration data was extracted for these
+        # rows, so leave those fields empty rather than guessing — see the
+        # document-level metadata note above).
         line_items = [
             LineItem(
                 description=p.description,
                 partNumber=p.number,
                 qty=p.qty,
                 serials=[],
+                lotBatchNumbers=[],
+                expirationDate=None,
             )
             for p in part_numbers
         ]
@@ -485,12 +669,19 @@ async def process_document(
         lineItems=line_items,
         partNumbers=part_numbers,
         serials=serials,
+        docLotBatchNumber=doc_lot_batch_number,
+        docExpirationDate=doc_expiration_date,
+        docCureDate=doc_cure_date,
         certificateDate=data.get("certificateDate") or None,
         testedDate=data.get("testedDate") or None,
+        applicableSpecs=data.get("applicableSpecs") or None,
+        authorizedSignatory=data.get("authorizedSignatory") or None,
+        signatoryTitle=data.get("signatoryTitle") or None,
         lifecycleDate=lifecycle.get("lifecycleDate"),
         recertificationDue=lifecycle.get("recertificationDue"),
         ageMonths=lifecycle.get("ageMonths"),
         monthsToRecert=lifecycle.get("monthsToRecert"),
+        daysToRecert=lifecycle.get("daysToRecert"),
         status=lifecycle.get("status", "Manual review"),
         priority=priority,
         invoiceBasis=invoice_basis,

@@ -1,7 +1,11 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "@tanstack/react-router";
 import type { Recommendation } from "@/lib/wom-data";
+import { formatRecertCountdown } from "@/lib/wom-data";
 import type { Summary } from "@/lib/api";
+import { fetchMySettings, updateMySettings } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import {
   PieChart,
   Pie,
@@ -41,8 +45,22 @@ import {
   ChevronDown,
   X,
   MapPin,
+  Settings,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -125,6 +143,68 @@ function ChartTooltip({
         </div>
       ))}
     </div>
+  );
+}
+
+// Y-axis tick for horizontal bar charts with long category names (e.g. company
+// names): shows more characters than the default axis width allows and adds a
+// native hover tooltip (SVG <title>) revealing the full, untruncated name.
+//
+// Wraps a label onto up to `maxLines` lines of roughly `maxCharsPerLine`
+// characters each (breaking on word boundaries), ellipsizing only the final
+// line if the text still doesn't fit. This avoids the single-line
+// text-anchor="end" clipping issue where long strings overflow past the left
+// edge of the SVG and get cut off mid-word.
+function wrapLabel(text: string, maxCharsPerLine: number, maxLines: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxCharsPerLine && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+
+  if (lines.length > maxLines) {
+    const kept = lines.slice(0, maxLines);
+    const last = kept[maxLines - 1];
+    kept[maxLines - 1] = last.length > maxCharsPerLine - 1 ? last.slice(0, maxCharsPerLine - 1) + "…" : last + "…";
+    return kept;
+  }
+  return lines;
+}
+
+function LongLabelTick({
+  x,
+  y,
+  payload,
+  maxCharsPerLine = 22,
+  maxLines = 2,
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value: string };
+  maxCharsPerLine?: number;
+  maxLines?: number;
+}) {
+  const full = String(payload?.value ?? "");
+  const lines = wrapLabel(full, maxCharsPerLine, maxLines);
+  const lineHeight = 11;
+  const startDy = -((lines.length - 1) * lineHeight) / 2 + 4;
+  return (
+    <text x={x} y={y} textAnchor="end" fontSize={10} fill="var(--color-muted-foreground)">
+      <title>{full}</title>
+      {lines.map((line, i) => (
+        <tspan key={i} x={x} dy={i === 0 ? startDy : lineHeight}>
+          {line}
+        </tspan>
+      ))}
+    </text>
   );
 }
 
@@ -255,11 +335,13 @@ function ChartCard({
   subtitle,
   children,
   className,
+  actions,
 }: {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   className?: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <div
@@ -268,8 +350,11 @@ function ChartCard({
         className,
       )}
     >
-      <div className="mb-1 font-display text-base font-bold tracking-tight text-foreground">
-        {title}
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="font-display text-base font-bold tracking-tight text-foreground">
+          {title}
+        </div>
+        {actions}
       </div>
       {subtitle && <div className="mb-4 text-xs text-muted-foreground">{subtitle}</div>}
       {children}
@@ -768,11 +853,317 @@ export function FilterBar({
 
 // ─── Upcoming Recerts List ────────────────────────────────────────────────────
 
-function UpcomingRow({ rec }: { rec: Recommendation }) {
-  const overdue = rec.monthsToRecert !== null && rec.monthsToRecert < 0;
-  const dueSoon = rec.monthsToRecert !== null && rec.monthsToRecert <= 6 && rec.monthsToRecert >= 0;
+type UpcomingSettingsState = {
+  showOverdue: boolean;
+  setShowOverdue: (v: boolean) => void;
+  showUpcoming: boolean;
+  setShowUpcoming: (v: boolean) => void;
+  overdueLimitMonths: string;
+  setOverdueLimitMonths: (v: string) => void;
+  upcomingLimitMonths: string;
+  setUpcomingLimitMonths: (v: string) => void;
+};
+
+const UPCOMING_SETTINGS_DEFAULTS = {
+  showOverdue: true,
+  showUpcoming: true,
+  overdueLimitMonths: "",
+  upcomingLimitMonths: "",
+};
+
+// Persists the "Upcoming Recertifications" show/limit settings per signed-in
+// user in Firestore (users/{uid}.upcomingSettings) so they're restored the next
+// time that user logs in, on any device/deployment — not just this browser.
+// localStorage is kept only as a fast local cache to avoid a flash of default
+// values while the Firestore read is in flight.
+function useUpcomingSettings(): UpcomingSettingsState {
+  const { user } = useAuth();
+  const uid = user?.uid ?? null;
+  const storageKey = `wom.upcomingSettings.${uid ?? "anon"}`;
+
+  const [showOverdue, setShowOverdue] = useState(UPCOMING_SETTINGS_DEFAULTS.showOverdue);
+  const [showUpcoming, setShowUpcoming] = useState(UPCOMING_SETTINGS_DEFAULTS.showUpcoming);
+  const [overdueLimitMonths, setOverdueLimitMonths] = useState(
+    UPCOMING_SETTINGS_DEFAULTS.overdueLimitMonths,
+  );
+  const [upcomingLimitMonths, setUpcomingLimitMonths] = useState(
+    UPCOMING_SETTINGS_DEFAULTS.upcomingLimitMonths,
+  );
+
+  // Guards writes until the initial load (local cache + Firestore) has completed,
+  // so we never overwrite saved settings with defaults while still loading.
+  const loadedRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load: local cache first (instant), then the backend (authoritative, synced
+  // across devices/deployments). Re-runs whenever the signed-in user changes.
+  useEffect(() => {
+    loadedRef.current = false;
+    let cancelled = false;
+
+    let cached = UPCOMING_SETTINGS_DEFAULTS;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) cached = { ...UPCOMING_SETTINGS_DEFAULTS, ...JSON.parse(raw) };
+    } catch {
+      // ignore malformed/unavailable storage
+    }
+    setShowOverdue(cached.showOverdue);
+    setShowUpcoming(cached.showUpcoming);
+    setOverdueLimitMonths(cached.overdueLimitMonths);
+    setUpcomingLimitMonths(cached.upcomingLimitMonths);
+
+    if (!uid) {
+      loadedRef.current = true;
+      return;
+    }
+
+    fetchMySettings()
+      .then((remote) => {
+        if (cancelled) return;
+        if (remote && Object.keys(remote).length > 0) {
+          const merged = { ...UPCOMING_SETTINGS_DEFAULTS, ...remote };
+          setShowOverdue(merged.showOverdue);
+          setShowUpcoming(merged.showUpcoming);
+          setOverdueLimitMonths(merged.overdueLimitMonths);
+          setUpcomingLimitMonths(merged.upcomingLimitMonths);
+        }
+      })
+      .catch(() => {
+        // ignore — local cache/defaults already applied above
+      })
+      .finally(() => {
+        if (!cancelled) loadedRef.current = true;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, storageKey]);
+
+  // Persist on every change, once the initial load has completed.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    const value = { showOverdue, showUpcoming, overdueLimitMonths, upcomingLimitMonths };
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(value));
+    } catch {
+      // ignore quota/availability errors
+    }
+    if (uid) {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        updateMySettings(value).catch(() => {
+          // ignore — local cache still has the latest value; will retry on next change
+        });
+      }, 600);
+    }
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [storageKey, uid, showOverdue, showUpcoming, overdueLimitMonths, upcomingLimitMonths]);
+
+  return {
+    showOverdue,
+    setShowOverdue,
+    showUpcoming,
+    setShowUpcoming,
+    overdueLimitMonths,
+    setOverdueLimitMonths,
+    upcomingLimitMonths,
+    setUpcomingLimitMonths,
+  };
+}
+
+function LimitPicker({
+  idPrefix,
+  disabled,
+  value,
+  onChange,
+}: {
+  idPrefix: string;
+  disabled?: boolean;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const presets = ["", "1", "2", "3", "6", "12"];
   return (
-    <div className="flex items-center gap-4 rounded-xl px-4 py-3 transition-colors hover:bg-foreground/[0.03]">
+    <div className={cn("space-y-2.5", disabled && "pointer-events-none opacity-40")}>
+      <div className="flex flex-wrap gap-1.5">
+        {presets.map((p) => (
+          <button
+            key={p || "none"}
+            type="button"
+            onClick={() => onChange(p)}
+            className={cn(
+              "rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors",
+              value === p
+                ? "border-orange-500 bg-orange-500 text-white"
+                : "border-border/60 bg-transparent text-muted-foreground hover:bg-foreground/[0.06]",
+            )}
+          >
+            {p === "" ? "No limit" : p}
+          </button>
+        ))}
+      </div>
+      <div>
+        <Label htmlFor={`${idPrefix}-custom`} className="text-[11px] text-muted-foreground">
+          Custom months
+        </Label>
+        <div className="mt-1 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onChange(String(Math.max(0, (Number(value) || 0) - 1)))}
+            className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-foreground/[0.06]"
+          >
+            <Minus className="size-3.5" />
+          </button>
+          <Input
+            id={`${idPrefix}-custom`}
+            type="number"
+            min={0}
+            inputMode="numeric"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="—"
+            className="h-8 text-center text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(String((Number(value) || 0) + 1))}
+            className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-foreground/[0.06]"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UpcomingSettingsPopover(props: UpcomingSettingsState) {
+  const {
+    showOverdue,
+    setShowOverdue,
+    showUpcoming,
+    setShowUpcoming,
+    overdueLimitMonths,
+    setOverdueLimitMonths,
+    upcomingLimitMonths,
+    setUpcomingLimitMonths,
+  } = props;
+  const [open, setOpen] = useState(false);
+
+  function handleReset() {
+    setShowOverdue(UPCOMING_SETTINGS_DEFAULTS.showOverdue);
+    setShowUpcoming(UPCOMING_SETTINGS_DEFAULTS.showUpcoming);
+    setOverdueLimitMonths(UPCOMING_SETTINGS_DEFAULTS.overdueLimitMonths);
+    setUpcomingLimitMonths(UPCOMING_SETTINGS_DEFAULTS.upcomingLimitMonths);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Upcoming recertifications settings"
+          className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+        >
+          <Settings className="size-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-5">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-foreground">Upcoming recertifications settings</span>
+          <Settings className="size-4 shrink-0 text-muted-foreground" />
+        </div>
+
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="upcoming-show-overdue" className="text-xs font-semibold">
+              Show overdue
+            </Label>
+            <Switch
+              id="upcoming-show-overdue"
+              checked={showOverdue}
+              onCheckedChange={setShowOverdue}
+            />
+          </div>
+          <div>
+            <Label className="text-[11px] text-muted-foreground">Overdue limit (months)</Label>
+            <div className="mt-1.5">
+              <LimitPicker
+                idPrefix="overdue-limit"
+                disabled={!showOverdue}
+                value={overdueLimitMonths}
+                onChange={setOverdueLimitMonths}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2.5 border-t border-border/40 pt-4">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="upcoming-show-upcoming" className="text-xs font-semibold">
+              Show upcoming
+            </Label>
+            <Switch
+              id="upcoming-show-upcoming"
+              checked={showUpcoming}
+              onCheckedChange={setShowUpcoming}
+            />
+          </div>
+          <div>
+            <Label className="text-[11px] text-muted-foreground">Upcoming limit (months)</Label>
+            <div className="mt-1.5">
+              <LimitPicker
+                idPrefix="upcoming-limit"
+                disabled={!showUpcoming}
+                value={upcomingLimitMonths}
+                onChange={setUpcomingLimitMonths}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border/40 pt-4">
+          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleReset}>
+            Reset
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 bg-orange-500 text-xs text-white hover:bg-orange-600"
+            onClick={() => setOpen(false)}
+          >
+            Apply
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+
+function UpcomingRow({ rec }: { rec: Recommendation }) {
+  const navigate = useNavigate();
+  const overdue =
+    rec.monthsToRecert !== null &&
+    (rec.monthsToRecert < 0 || (rec.monthsToRecert === 0 && (rec.daysToRecert ?? 0) < 0));
+  const dueSoon =
+    !overdue && rec.monthsToRecert !== null && rec.monthsToRecert <= 6 && rec.monthsToRecert >= 0;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => navigate({ to: "/records", search: { recId: rec.id } })}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          navigate({ to: "/records", search: { recId: rec.id } });
+        }
+      }}
+      className="flex cursor-pointer items-center gap-4 rounded-xl px-4 py-3 transition-colors hover:bg-foreground/[0.03]"
+    >
       <div
         className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
@@ -803,11 +1194,7 @@ function UpcomingRow({ rec }: { rec: Recommendation }) {
           {rec.recertificationDue ?? "—"}
         </div>
         <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-          {rec.monthsToRecert !== null
-            ? rec.monthsToRecert < 0
-              ? `${Math.abs(rec.monthsToRecert)} mo overdue`
-              : `in ${rec.monthsToRecert} mo`
-            : "—"}
+          {formatRecertCountdown(rec)}
         </div>
       </div>
     </div>
@@ -875,8 +1262,8 @@ export function ChartsSection({ filtered }: { filtered: Recommendation[] }) {
     for (const r of filtered) if (r.customer) counts[r.customer] = (counts[r.customer] ?? 0) + 1;
     return Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([name, count]) => ({ name: name.length > 20 ? name.slice(0, 18) + "…" : name, count }));
+      .slice(0, 6)
+      .map(([name, count]) => ({ name, count }));
   }, [filtered]);
 
   const equipmentData = useMemo(() => {
@@ -888,14 +1275,40 @@ export function ChartsSection({ filtered }: { filtered: Recommendation[] }) {
       .map(([name, count]) => ({ name: name.length > 22 ? name.slice(0, 20) + "…" : name, count }));
   }, [filtered]);
 
-  const upcoming = useMemo(
-    () =>
-      [...filtered]
-        .filter((r) => r.monthsToRecert !== null)
-        .sort((a, b) => (a.monthsToRecert ?? 999) - (b.monthsToRecert ?? 999))
-        .slice(0, 10),
-    [filtered],
-  );
+  const {
+    showOverdue,
+    setShowOverdue,
+    showUpcoming,
+    setShowUpcoming,
+    overdueLimitMonths,
+    setOverdueLimitMonths,
+    upcomingLimitMonths,
+    setUpcomingLimitMonths,
+  } = useUpcomingSettings();
+  const upcomingAll = useMemo(() => {
+    const overdueLimit = overdueLimitMonths.trim() === "" ? null : Number(overdueLimitMonths);
+    const upcomingLimit = upcomingLimitMonths.trim() === "" ? null : Number(upcomingLimitMonths);
+    return [...filtered]
+      .filter((r) => r.monthsToRecert !== null)
+      .filter((r) => {
+        const m = r.monthsToRecert as number;
+        if (m < 0) {
+          if (!showOverdue) return false;
+          if (overdueLimit !== null && Math.abs(m) > overdueLimit) return false;
+          return true;
+        }
+        if (!showUpcoming) return false;
+        if (upcomingLimit !== null && m > upcomingLimit) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const da = a.daysToRecert ?? (a.monthsToRecert ?? 999) * 30;
+        const db = b.daysToRecert ?? (b.monthsToRecert ?? 999) * 30;
+        return da - db;
+      });
+  }, [filtered, showOverdue, showUpcoming, overdueLimitMonths, upcomingLimitMonths]);
+  const upcoming = upcomingAll.slice(0, 5);
+  const [upcomingDialogOpen, setUpcomingDialogOpen] = useState(false);
 
   function timelineBarColor(label: string) {
     if (label === "Overdue") return PALETTE.danger;
@@ -1136,8 +1549,8 @@ export function ChartsSection({ filtered }: { filtered: Recommendation[] }) {
                 <YAxis
                   type="category"
                   dataKey="name"
-                  width={120}
-                  tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+                  width={190}
+                  tick={<LongLabelTick maxCharsPerLine={22} maxLines={2} />}
                   axisLine={false}
                   tickLine={false}
                 />
@@ -1187,20 +1600,60 @@ export function ChartsSection({ filtered }: { filtered: Recommendation[] }) {
           )}
         </ChartCard>
 
-        <ChartCard title="Upcoming Recertifications" subtitle="Next 10 records sorted by urgency">
+        <ChartCard
+          title="Upcoming Recertifications"
+          subtitle={`Next ${upcoming.length} of ${upcomingAll.length} records sorted by urgency`}
+          actions={
+            <UpcomingSettingsPopover
+              showOverdue={showOverdue}
+              setShowOverdue={setShowOverdue}
+              showUpcoming={showUpcoming}
+              setShowUpcoming={setShowUpcoming}
+              overdueLimitMonths={overdueLimitMonths}
+              setOverdueLimitMonths={setOverdueLimitMonths}
+              upcomingLimitMonths={upcomingLimitMonths}
+              setUpcomingLimitMonths={setUpcomingLimitMonths}
+            />
+          }
+        >
           {upcoming.length === 0 ? (
             <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
               No upcoming recertifications
             </div>
           ) : (
-            <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/40">
-              {upcoming.map((r) => (
-                <UpcomingRow key={r.id} rec={r} />
-              ))}
-            </div>
+            <>
+              <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/40">
+                {upcoming.map((r) => (
+                  <UpcomingRow key={r.id} rec={r} />
+                ))}
+              </div>
+              {upcomingAll.length > upcoming.length && (
+                <button
+                  type="button"
+                  onClick={() => setUpcomingDialogOpen(true)}
+                  className="mt-3 w-full rounded-lg border border-border/40 py-2 text-xs font-bold text-primary transition-colors hover:bg-primary/5"
+                >
+                  See all {upcomingAll.length} →
+                </button>
+              )}
+            </>
           )}
         </ChartCard>
       </div>
+
+      <Dialog open={upcomingDialogOpen} onOpenChange={setUpcomingDialogOpen}>
+        <DialogContent className="flex max-h-[80vh] max-w-xl flex-col overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>All Upcoming Recertifications</DialogTitle>
+            <DialogDescription>{upcomingAll.length} records sorted by urgency</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 divide-y divide-border/30 overflow-y-auto rounded-xl border border-border/40">
+            {upcomingAll.map((r) => (
+              <UpcomingRow key={r.id} rec={r} />
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1358,8 +1811,8 @@ export function HomeTab({
     }
     return Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([name, count]) => ({ name: name.length > 20 ? name.slice(0, 18) + "…" : name, count }));
+      .slice(0, 6)
+      .map(([name, count]) => ({ name, count }));
   }, [filtered]);
 
   // ── Top equipment bar chart ────────────────────────────────────────────────
@@ -1375,12 +1828,40 @@ export function HomeTab({
   }, [filtered]);
 
   // ── Upcoming recertifications ──────────────────────────────────────────────
-  const upcoming = useMemo(() => {
+  const {
+    showOverdue,
+    setShowOverdue,
+    showUpcoming,
+    setShowUpcoming,
+    overdueLimitMonths,
+    setOverdueLimitMonths,
+    upcomingLimitMonths,
+    setUpcomingLimitMonths,
+  } = useUpcomingSettings();
+  const upcomingAll = useMemo(() => {
+    const overdueLimit = overdueLimitMonths.trim() === "" ? null : Number(overdueLimitMonths);
+    const upcomingLimit = upcomingLimitMonths.trim() === "" ? null : Number(upcomingLimitMonths);
     return [...filtered]
       .filter((r) => r.monthsToRecert !== null)
-      .sort((a, b) => (a.monthsToRecert ?? 999) - (b.monthsToRecert ?? 999))
-      .slice(0, 10);
-  }, [filtered]);
+      .filter((r) => {
+        const m = r.monthsToRecert as number;
+        if (m < 0) {
+          if (!showOverdue) return false;
+          if (overdueLimit !== null && Math.abs(m) > overdueLimit) return false;
+          return true;
+        }
+        if (!showUpcoming) return false;
+        if (upcomingLimit !== null && m > upcomingLimit) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const da = a.daysToRecert ?? (a.monthsToRecert ?? 999) * 30;
+        const db = b.daysToRecert ?? (b.monthsToRecert ?? 999) * 30;
+        return da - db;
+      });
+  }, [filtered, showOverdue, showUpcoming, overdueLimitMonths, upcomingLimitMonths]);
+  const upcoming = upcomingAll.slice(0, 5);
+  const [upcomingDialogOpen, setUpcomingDialogOpen] = useState(false);
 
   // ── Bar chart bar color helper ─────────────────────────────────────────────
   function timelineBarColor(label: string) {
@@ -1841,8 +2322,8 @@ export function HomeTab({
                     <YAxis
                       type="category"
                       dataKey="name"
-                      width={120}
-                      tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+                      width={190}
+                      tick={<LongLabelTick maxCharsPerLine={22} maxLines={2} />}
                       axisLine={false}
                       tickLine={false}
                     />
@@ -1905,21 +2386,60 @@ export function HomeTab({
             {/* Upcoming Recertifications */}
             <ChartCard
               title="Upcoming Recertifications"
-              subtitle="Next 10 records sorted by urgency"
+              subtitle={`Next ${upcoming.length} of ${upcomingAll.length} records sorted by urgency`}
+              actions={
+                <UpcomingSettingsPopover
+                  showOverdue={showOverdue}
+                  setShowOverdue={setShowOverdue}
+                  showUpcoming={showUpcoming}
+                  setShowUpcoming={setShowUpcoming}
+                  overdueLimitMonths={overdueLimitMonths}
+                  setOverdueLimitMonths={setOverdueLimitMonths}
+                  upcomingLimitMonths={upcomingLimitMonths}
+                  setUpcomingLimitMonths={setUpcomingLimitMonths}
+                />
+              }
             >
               {upcoming.length === 0 ? (
                 <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
                   {isEmpty ? "No results match current filters" : "No upcoming recertifications"}
                 </div>
               ) : (
-                <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/40">
-                  {upcoming.map((r) => (
-                    <UpcomingRow key={r.id} rec={r} />
-                  ))}
-                </div>
+                <>
+                  <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/40">
+                    {upcoming.map((r) => (
+                      <UpcomingRow key={r.id} rec={r} />
+                    ))}
+                  </div>
+                  {upcomingAll.length > upcoming.length && (
+                    <button
+                      type="button"
+                      onClick={() => setUpcomingDialogOpen(true)}
+                      className="mt-3 w-full rounded-lg border border-border/40 py-2 text-xs font-bold text-primary transition-colors hover:bg-primary/5"
+                    >
+                      See all {upcomingAll.length} →
+                    </button>
+                  )}
+                </>
               )}
             </ChartCard>
           </div>
+
+          <Dialog open={upcomingDialogOpen} onOpenChange={setUpcomingDialogOpen}>
+            <DialogContent className="flex max-h-[80vh] max-w-xl flex-col overflow-hidden">
+              <DialogHeader>
+                <DialogTitle>All Upcoming Recertifications</DialogTitle>
+                <DialogDescription>
+                  {upcomingAll.length} records sorted by urgency
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex-1 divide-y divide-border/30 overflow-y-auto rounded-xl border border-border/40">
+                {upcomingAll.map((r) => (
+                  <UpcomingRow key={r.id} rec={r} />
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* ── Summary strip ───────────────────────────────────────────── */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/30 bg-foreground/[0.015] px-6 py-4 text-xs text-muted-foreground">

@@ -1,23 +1,30 @@
-import firebase_admin
-from firebase_admin import credentials, auth
-import os
-import json
+"""One-off script to create the initial admin user in Cosmos DB."""
+import uuid
+from dotenv import load_dotenv
 
-# Initialize Firebase Admin
-if not firebase_admin._apps:
-    service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "{}")
-    cred = credentials.Certificate(json.loads(service_account_json))
-    firebase_admin.initialize_app(cred)
+load_dotenv()
 
-def create_admin_user(email, password, display_name):
+from auth import hash_password
+from store import user_store
+
+
+def create_admin_user(email: str, password: str, display_name: str, role: str = "System Administrator"):
     try:
-        user = auth.create_user(
-            email=email,
-            password=password,
-            display_name=display_name
+        if user_store.get_by_email(email):
+            print(f"A user with email {email} already exists.")
+            return None
+        uid = str(uuid.uuid4())
+        user_store.add(
+            {
+                "id": uid,
+                "email": email,
+                "displayName": display_name,
+                "role": role,
+                "passwordHash": hash_password(password),
+            }
         )
-        print(f"Successfully created new user: {user.uid}")
-        return user
+        print(f"Successfully created new user: {uid}")
+        return uid
     except Exception as e:
         print(f"Error creating user: {e}")
         return None

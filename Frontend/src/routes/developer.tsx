@@ -216,7 +216,7 @@ function DeveloperPortal() {
     queryKey: ["activity-logs"],
     queryFn: fetchActivityLogs,
     enabled: !!user && (user.role === "Developer" || user.role === "System Administrator"),
-    refetchInterval: 8000, // Auto-refresh logs every 8 seconds
+    refetchInterval: 20 * 60 * 1000, // Auto-refresh logs every 20 minutes
   });
 
   const logs = useMemo(() => {
@@ -1075,7 +1075,7 @@ function DeveloperPortal() {
                 <div className="flex items-center justify-between p-3.5 bg-secondary/35 border border-border/40 rounded-2xl text-xs font-mono">
                   <div className="flex items-center gap-2.5">
                     <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-slate-700 font-bold">Google Firestore</span>
+                    <span className="text-slate-700 font-bold">Azure Cosmos DB</span>
                   </div>
                   <span className="text-emerald-600 uppercase font-semibold text-[9px] bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-sans">CONNECTED</span>
                 </div>
@@ -1084,7 +1084,7 @@ function DeveloperPortal() {
                 <div className="flex items-center justify-between p-3.5 bg-secondary/35 border border-border/40 rounded-2xl text-xs font-mono">
                   <div className="flex items-center gap-2.5">
                     <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-slate-700 font-bold">Firebase Authentication</span>
+                    <span className="text-slate-700 font-bold">JWT Authentication</span>
                   </div>
                   <span className="text-emerald-600 uppercase font-semibold text-[9px] bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-sans">ACTIVE</span>
                 </div>

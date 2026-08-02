@@ -75,7 +75,7 @@ function Dashboard() {
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["recommendations"],
     queryFn: fetchRecommendations,
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes (was 30s — too heavy on Firestore quota)
   });
 
   const recommendations = data?.recommendations ?? [];

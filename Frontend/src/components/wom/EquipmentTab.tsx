@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Recommendation } from "@/lib/wom-data";
-import { getEquipmentNames } from "@/lib/wom-data";
+import { getEquipmentNames, formatRecertCountdown } from "@/lib/wom-data";
 import { StatusBadge, PriorityChip } from "./StatusBadge";
 import {
   Wrench,
@@ -22,6 +22,7 @@ interface EquipmentGroup {
   partNumbers: string[];
   earliestRecertDue: string | null;
   minMonthsToRecert: number | null;
+  minDaysToRecert: number | null;
   highestPriority: "High" | "Low" | "Manual review";
   worstStatus: string;
   records: Recommendation[];
@@ -50,6 +51,7 @@ function groupEquipment(recs: Recommendation[]): EquipmentGroup[] {
           partNumbers: [],
           earliestRecertDue: null,
           minMonthsToRecert: null,
+          minDaysToRecert: null,
           highestPriority: r.priority,
           worstStatus: r.status,
           records: [],
@@ -69,6 +71,7 @@ function groupEquipment(recs: Recommendation[]): EquipmentGroup[] {
       if (r.monthsToRecert !== null) {
         if (g.minMonthsToRecert === null || r.monthsToRecert < g.minMonthsToRecert) {
           g.minMonthsToRecert = r.monthsToRecert;
+          g.minDaysToRecert = r.daysToRecert ?? null;
           g.earliestRecertDue = r.recertificationDue;
         }
       }
@@ -344,9 +347,10 @@ export function EquipmentTab({
                     </div>
                     {eq.minMonthsToRecert !== null && (
                       <div className="text-muted-foreground text-[10px] mt-0.5">
-                        {eq.minMonthsToRecert < 0
-                          ? `${Math.abs(eq.minMonthsToRecert)} mo overdue`
-                          : `In ${eq.minMonthsToRecert} mo`}
+                        {formatRecertCountdown({
+                          monthsToRecert: eq.minMonthsToRecert,
+                          daysToRecert: eq.minDaysToRecert,
+                        })}
                       </div>
                     )}
                   </div>

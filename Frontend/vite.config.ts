@@ -24,7 +24,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           "vendor-react": ["react", "react-dom"],
-          "vendor-firebase": ["firebase/app", "firebase/auth", "firebase/firestore"],
           "vendor-tanstack": ["@tanstack/react-router", "@tanstack/react-query"],
           "vendor-ui": ["lucide-react", "@radix-ui/react-dialog", "@radix-ui/react-popover"],
         },

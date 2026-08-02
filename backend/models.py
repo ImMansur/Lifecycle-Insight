@@ -23,7 +23,35 @@ class LineItem(BaseModel):
     description: Optional[str] = None
     partNumber: Optional[str] = None
     qty: Optional[int] = None
+    # TRUE unit serial numbers only (e.g. "EQUIPMENT SERIAL NO.", "SERIALIZATION").
     serials: List[str] = Field(default_factory=list)
+    # Lot / batch numbers for this row, when the source shows them as their
+    # OWN distinct column (distinct concept from a serial number).
+    lotBatchNumbers: List[str] = Field(default_factory=list)
+    # Expiration / cure-date string for this row, when the source shows it as
+    # its own distinct column.
+    expirationDate: Optional[str] = None
+    # Some templates print S.O. / Lot & Batch / Expiration together as ONE
+    # combined column (e.g. "23810 / 4249260-12 / 3Q17"). When the source
+    # keeps them combined like this, we preserve the raw string as-is here
+    # instead of guessing how to split it.
+    soLotBatchExp: Optional[str] = None
+    # Technical ratings/spec block (rated working pressure, design
+    # temperature, NACE/sour-service compliance, H2S/CO2/chloride/pH limits,
+    # etc.) that some templates print directly below the product description
+    # inside the same Description cell. It's a visually/conceptually SEPARATE
+    # block from the actual equipment description (a blank line separates
+    # them in the source, and it spans its own wrapped table rows) — kept
+    # here instead of being concatenated onto "description" so the equipment
+    # name/description stays short and readable.
+    specifications: Optional[str] = None
+    # Invoice number this specific row/part is billed under, when the source
+    # states it per-row (distinct from salesOrder/purchaseOrder, which are
+    # document-level). Use null if not stated per-row.
+    invoiceNumber: Optional[str] = None
+    # Work order / W.O. reference for this specific row/part, when the
+    # source states it per-row. Use null if not stated per-row.
+    workOrder: Optional[str] = None
 
 
 class Recommendation(BaseModel):
@@ -45,12 +73,26 @@ class Recommendation(BaseModel):
     # screens (Equipment tab, filters, etc.) continue to work unchanged.
     partNumbers: List[PartEntry] = Field(default_factory=list)
     serials: List[str] = Field(default_factory=list)
+    # Document-level lot/batch/expiration/cure-date, extracted from a footer
+    # or summary note that applies to the whole certificate rather than one
+    # row (e.g. "B# 191218, CD: 2018Q4, EXP: 2025Q4"). Used as a fallback for
+    # line items that have no per-row value of their own.
+    docLotBatchNumber: Optional[str] = None
+    docExpirationDate: Optional[str] = None
+    docCureDate: Optional[str] = None
     certificateDate: Optional[str] = None
     testedDate: Optional[str] = None
+    # Certificate-level compliance statement (e.g. "API 6A, NACE MR0175") and
+    # who signed/authorized the certificate — distinct from a line item's
+    # per-part "specifications" (ratings/pressure/temperature block).
+    applicableSpecs: Optional[str] = None
+    authorizedSignatory: Optional[str] = None
+    signatoryTitle: Optional[str] = None
     lifecycleDate: Optional[str] = None
     recertificationDue: Optional[str] = None
     ageMonths: Optional[int] = None
     monthsToRecert: Optional[int] = None
+    daysToRecert: Optional[int] = None
     status: str
     priority: Literal["High", "Low", "Manual review"]
     invoiceBasis: Optional[str] = None
@@ -136,8 +178,20 @@ class PatchRecommendation(BaseModel):
     location: Optional[str] = None
     equipment: Optional[str] = None
     certificateDate: Optional[str] = None
+    testedDate: Optional[str] = None
+    docLotBatchNumber: Optional[str] = None
+    docExpirationDate: Optional[str] = None
+    docCureDate: Optional[str] = None
+    applicableSpecs: Optional[str] = None
+    authorizedSignatory: Optional[str] = None
+    signatoryTitle: Optional[str] = None
     serials: Optional[List[str]] = None
     partNumbers: Optional[List[PartEntry]] = None
+    # Structured per-part rows (source of truth for the part ↔ serial
+    # relationship). When provided, `partNumbers`/`serials` (legacy flat
+    # arrays) are re-derived from this list server-side rather than trusted
+    # as independently-submitted values, so the two never drift apart.
+    lineItems: Optional[List[LineItem]] = None
     notes: Optional[str] = None
     priority: Optional[Literal["High", "Low", "Manual review"]] = None
 

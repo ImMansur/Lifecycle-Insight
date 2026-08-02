@@ -15,6 +15,268 @@ logger = logging.getLogger(__name__)
 _DI_TIMEOUT_SECONDS = float(os.environ.get("DI_TIMEOUT_SECONDS", "280"))
 
 
+# Phrases that mark a row as belonging to the technical ratings/spec block
+# (rated pressure, design temperature, NACE/sour-service compliance,
+# H2S/CO2/chloride/pH limits, etc.) rather than the actual equipment
+# description. Once a continuation row matches one of these, ALL further
+# continuation rows for that same item are also treated as spec-block text
+# (the block always spans several wrapped rows together, and later rows in
+# the block — e.g. a bare "Metallic: T-20/350..." line — don't repeat a
+# marker keyword themselves).
+_SPEC_BLOCK_MARKERS = (
+    "rated working pressure",
+    "design temperature",
+    "sour service",
+    "partial pressure",
+    "chloride concentration",
+    "elemental sulphur",
+    "manufactured in accordance",
+    "nace mr0175",
+    "iso 15156",
+    "ph (min)",
+    "temperature for metallic",
+    "non metallic sealing material",
+    "non-metallic sealing material",
+)
+
+
+def _is_spec_block_text(text: str) -> bool:
+    t = text.lower()
+    return any(marker in t for marker in _SPEC_BLOCK_MARKERS)
+
+
+def _build_confirmed_line_items(tables) -> list[dict]:
+    """
+    Deterministically group Document Intelligence table rows into line items.
+
+    Uses each table's own row/column structure — not free text — to decide
+    row boundaries: a row is a CONTINUATION of the previous row when its
+    index-like columns (an "ITEMS"/index column and/or a "QTY" column) are
+    blank, regardless of what appears in other columns (e.g. a secondary
+    part/reference number printed in the PART NO. column slot). This removes
+    the ambiguity that otherwise forces the LLM to guess where one BOM/parts
+    row ends and the next begins — the exact mistake that caused a single
+    row to be split into multiple fabricated line items.
+
+    Column roles are inferred generically from header text ("description",
+    "qty"/"quantity", "part", "item") so this works across different CoC
+    table layouts, not just one specific template. Tables with no identifiable
+    part-number column (e.g. a plain customer/PO/SO key-value table) are
+    skipped.
+    """
+    results: list[dict] = []
+
+    for table in tables or []:
+        cells_by_row: dict[int, dict[int, str]] = {}
+        header_by_col: dict[int, str] = {}
+        for cell in table.cells or []:
+            content = (cell.content or "").replace("\n", " ").strip()
+            cells_by_row.setdefault(cell.row_index, {})[cell.column_index] = content
+            if getattr(cell, "kind", None) == "columnHeader" or cell.row_index == 0:
+                existing = header_by_col.get(cell.column_index, "")
+                header_by_col[cell.column_index] = (existing + " " + content).strip()
+
+        roles: dict[int, str] = {}
+        for col, header in header_by_col.items():
+            h = header.lower()
+            if "description" in h:
+                roles[col] = "description"
+            elif "qty" in h or "quantity" in h:
+                roles[col] = "qty"
+            elif "part" in h:
+                roles[col] = "partno"
+            elif "item" in h:
+                roles[col] = "items_index"
+            elif "serial" in h:
+                roles[col] = "serial"
+            elif "invoice" in h:
+                roles[col] = "invoice"
+            elif "work order" in h or "w.o." in h or "w/o" in h:
+                roles[col] = "workorder"
+            else:
+                # "lot" and "batch" are treated as ONE concept (lot/batch is a
+                # single unified idea, not two) so a plain "Lot / Batch No."
+                # column isn't miscounted as 2 concepts and wrongly flagged
+                # as a combined column.
+                has_lotbatch = "lot" in h or "batch" in h
+                has_exp = "exp" in h
+                has_so = "s/o" in h or "sales order" in h
+                if sum((has_lotbatch, has_exp, has_so)) >= 2:
+                    # Header smashes together 2+ distinct concepts (e.g.
+                    # "S/O / LOT & BATCH / EXP.") — this is ONE combined
+                    # column whose value must be preserved verbatim, not
+                    # split apart.
+                    roles[col] = "combined"
+                elif has_lotbatch:
+                    roles[col] = "lotbatch"
+                elif has_exp:
+                    roles[col] = "expiration"
+
+        partno_col = next((c for c, r in roles.items() if r == "partno"), None)
+        if partno_col is None:
+            continue  # not a BOM/parts table
+
+        index_cols = [c for c, r in roles.items() if r in ("items_index", "qty")]
+        desc_col = next((c for c, r in roles.items() if r == "description"), None)
+        qty_col = next((c for c, r in roles.items() if r == "qty"), None)
+        serial_col = next((c for c, r in roles.items() if r == "serial"), None)
+        lotbatch_col = next((c for c, r in roles.items() if r == "lotbatch"), None)
+        expiration_col = next((c for c, r in roles.items() if r == "expiration"), None)
+        combined_col = next((c for c, r in roles.items() if r == "combined"), None)
+        invoice_col = next((c for c, r in roles.items() if r == "invoice"), None)
+        workorder_col = next((c for c, r in roles.items() if r == "workorder"), None)
+
+        def is_row_start(row: dict[int, str]) -> bool:
+            if index_cols:
+                return any(row.get(c, "").strip() for c in index_cols)
+            return bool(row.get(partno_col, "").strip())
+
+        sorted_row_indices = sorted(i for i in cells_by_row.keys() if i != 0)
+
+        # Table headers can wrap onto more than one physical row (e.g. "Rev."
+        # on row 0 and "No." continuing on row 1, or "(if applicable)" split
+        # across two rows). Treat every row before the first row that truly
+        # looks like a data row (has content in an index/qty/partno column)
+        # as part of the header block and skip it, instead of only skipping
+        # row_index 0 — otherwise a leading header-continuation row gets
+        # mistaken for a real (blank) line item.
+        first_data_row = next(
+            (idx for idx in sorted_row_indices if is_row_start(cells_by_row[idx])),
+            None,
+        )
+        if first_data_row is None:
+            continue  # no recognizable data rows in this table
+
+        current_item: dict | None = None
+        for row_idx in sorted_row_indices:
+            if row_idx < first_data_row:
+                continue
+            row = cells_by_row[row_idx]
+            # Fully blank rows (spacer/section-divider rows within the table)
+            # carry no information — skip them entirely rather than letting
+            # them start a bogus item when there's no current item to merge
+            # into yet.
+            if not any(v.strip() for v in row.values()):
+                continue
+            if current_item is None or is_row_start(row):
+                if current_item is not None:
+                    results.append(current_item)
+                qty_raw = row.get(qty_col, "").strip() if qty_col is not None else ""
+                try:
+                    qty_val = int(qty_raw) if qty_raw else None
+                except ValueError:
+                    qty_val = None
+                current_item = {
+                    "partNumber": row.get(partno_col, "").strip() or None,
+                    "qty": qty_val,
+                    "knownDescription": row.get(desc_col, "").strip() if desc_col is not None else "",
+                    "specifications": None,
+                    "_spec_mode": False,
+                    "serial": None,
+                    "lotBatch": None,
+                    "expiration": None,
+                    "combined": None,
+                    "invoice": None,
+                    "workOrder": None,
+                }
+                # Capture serial/lot-batch/expiration/combined columns already
+                # present on this SAME starting row (most BOM rows are a
+                # single physical row with no continuation — without this,
+                # that sibling-column data was silently dropped whenever
+                # there was no wrapped continuation row to carry it via the
+                # branch below). Columns that don't match any known role
+                # (e.g. "Rev. No.", "PR Level") are intentionally ignored —
+                # they aren't serial/lot/expiration data and would only add
+                # noise for the LLM to misclassify.
+                if serial_col is not None and row.get(serial_col, "").strip():
+                    current_item["serial"] = row[serial_col].strip()
+                if lotbatch_col is not None and row.get(lotbatch_col, "").strip():
+                    current_item["lotBatch"] = row[lotbatch_col].strip()
+                if expiration_col is not None and row.get(expiration_col, "").strip():
+                    current_item["expiration"] = row[expiration_col].strip()
+                if combined_col is not None and row.get(combined_col, "").strip():
+                    current_item["combined"] = row[combined_col].strip()
+                if invoice_col is not None and row.get(invoice_col, "").strip():
+                    current_item["invoice"] = row[invoice_col].strip()
+                if workorder_col is not None and row.get(workorder_col, "").strip():
+                    current_item["workOrder"] = row[workorder_col].strip()
+            else:
+                for col, val in row.items():
+                    val = val.strip()
+                    if not val:
+                        continue
+                    if col == desc_col:
+                        if current_item["_spec_mode"] or _is_spec_block_text(val):
+                            current_item["_spec_mode"] = True
+                            current_item["specifications"] = (
+                                (current_item["specifications"] or "") + " " + val
+                            ).strip()
+                        else:
+                            current_item["knownDescription"] = (current_item["knownDescription"] + " " + val).strip()
+                    elif col == serial_col:
+                        current_item["serial"] = ((current_item["serial"] or "") + " " + val).strip()
+                    elif col == lotbatch_col:
+                        current_item["lotBatch"] = ((current_item["lotBatch"] or "") + " " + val).strip()
+                    elif col == expiration_col:
+                        current_item["expiration"] = ((current_item["expiration"] or "") + " " + val).strip()
+                    elif col == combined_col:
+                        current_item["combined"] = ((current_item["combined"] or "") + " " + val).strip()
+                    elif col == invoice_col:
+                        current_item["invoice"] = ((current_item["invoice"] or "") + " " + val).strip()
+                    elif col == workorder_col:
+                        current_item["workOrder"] = ((current_item["workOrder"] or "") + " " + val).strip()
+                    elif col == partno_col and serial_col is None and combined_col is None:
+                        # Some templates print a secondary reference/serial
+                        # number in the PART NO. column slot on a wrapped
+                        # continuation row (no dedicated serial column at
+                        # all) — treat it as this item's serial rather than
+                        # dropping it.
+                        current_item["serial"] = ((current_item["serial"] or "") + " " + val).strip()
+                    # else: ignore other unclassified columns (Rev, PR Level,
+                    # etc.) — noise, not part of this data model.
+
+        if current_item is not None:
+            results.append(current_item)
+
+    return results
+
+
+def _render_confirmed_items_block(items: list[dict]) -> str:
+    if not items:
+        return ""
+
+    lines = [
+        "---CONFIRMED LINE ITEMS (grouped by deterministic layout/table "
+        "analysis — these partNumber/qty values and row groupings, AND any "
+        "serial/lotBatch/expiration/soLotBatchExp/invoice/workOrder/"
+        "specifications values shown below, are AUTHORITATIVE; do not "
+        "re-split, merge, re-derive, or change them. Only fill in "
+        "'description' where marked MISSING, using the plain document text "
+        "below in the same top-to-bottom order. Never fold a "
+        "'specifications' value into 'description' — they are separate "
+        "fields.)---"
+    ]
+    for i, item in enumerate(items, start=1):
+        desc = item["knownDescription"] or "(MISSING — find matching text in document)"
+        parts = [f"Item {i}: partNumber={item['partNumber']} | qty={item['qty']} | description={desc}"]
+        if item.get("serial"):
+            parts.append(f"serial={item['serial']}")
+        if item.get("lotBatch"):
+            parts.append(f"lotBatch={item['lotBatch']}")
+        if item.get("expiration"):
+            parts.append(f"expiration={item['expiration']}")
+        if item.get("combined"):
+            parts.append(f"soLotBatchExp={item['combined']}")
+        if item.get("invoice"):
+            parts.append(f"invoice={item['invoice']}")
+        if item.get("workOrder"):
+            parts.append(f"workOrder={item['workOrder']}")
+        if item.get("specifications"):
+            parts.append(f"specifications={item['specifications']}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
 async def extract_text(file_bytes: bytes, filename: str) -> tuple[str, bool]:
     """
     Extract raw text from a document using Azure Document Intelligence.
@@ -58,6 +320,12 @@ async def extract_text(file_bytes: bytes, filename: str) -> tuple[str, bool]:
                 lines.append(line.content)
 
         text = "\n".join(lines).strip()
+
+        confirmed_items = _build_confirmed_line_items(result.tables)
+        confirmed_block = _render_confirmed_items_block(confirmed_items)
+        if confirmed_block:
+            text = text + "\n\n" + confirmed_block
+
         is_ocr_needed = len(text) < 100
 
         logger.info("DI extracted %d chars from %s", len(text), filename)

@@ -8,8 +8,9 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusBadge, PriorityChip } from "./StatusBadge";
-import type { Recommendation } from "@/lib/wom-data";
-import { groupSerialsByPart, getEquipmentNames } from "@/lib/wom-data";
+import type { Recommendation, LineItem } from "@/lib/wom-data";
+import { groupSerialsByPart, getEquipmentNames, formatRecertCountdown } from "@/lib/wom-data";
+import { TruncatedText } from "./TruncatedText";
 import { updateRecommendation, suggestNextSteps, fetchDocumentUrl } from "@/lib/api";
 import type { RecommendationPatch, Action } from "@/lib/api";
 import {
@@ -32,7 +33,24 @@ import {
   Loader2,
   ExternalLink,
   FileSearch,
+  ShieldCheck,
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
+
+/** Duration phrase for email copy, e.g. "12 days" or "3 months" — falls back
+ * to exact days when monthsToRecert rounds down to 0 so drafts never read
+ * "currently 0 months past" for something that's actually days overdue. */
+function recertMagnitude(rec: Recommendation): string {
+  if (rec.monthsToRecert === 0 && rec.daysToRecert != null) {
+    const d = Math.abs(rec.daysToRecert);
+    return `${d} day${d !== 1 ? "s" : ""}`;
+  }
+  const m = Math.abs(rec.monthsToRecert ?? 0);
+  return `${m} month${m !== 1 ? "s" : ""}`;
+}
 
 function buildPlainText(rec: Recommendation): string {
   const customer = rec.customer ?? "Valued Customer";
@@ -48,10 +66,9 @@ function buildPlainText(rec: Recommendation): string {
 
   let urgency = "";
   if (rec.status === "Expired / overdue") {
-    const m = Math.abs(rec.monthsToRecert ?? 0);
-    urgency = `This equipment is currently ${m} month${m !== 1 ? "s" : ""} past its 5-year recertification window. Prompt action is strongly recommended to maintain API compliance and operational safety. Please treat this as an urgent matter.`;
+    urgency = `This equipment is currently ${recertMagnitude(rec)} past its 5-year recertification window. Prompt action is strongly recommended to maintain API compliance and operational safety. Please treat this as an urgent matter.`;
   } else if (rec.status === "Due soon") {
-    urgency = `This equipment is approaching its 5-year recertification window in approximately ${rec.monthsToRecert} month${rec.monthsToRecert !== 1 ? "s" : ""}. We recommend scheduling recertification at your earliest convenience to avoid operational disruption.`;
+    urgency = `This equipment is approaching its 5-year recertification window in approximately ${recertMagnitude(rec)}. We recommend scheduling recertification at your earliest convenience to avoid operational disruption.`;
   } else {
     urgency = `This equipment is currently within its mid-cycle service window. Scheduling a proactive inspection or recertification now may reduce lead times and ensure uninterrupted operations.`;
   }
@@ -129,11 +146,10 @@ function EmailDraftDialog({
   let urgency = "";
   let urgencyTone = "text-foreground/80";
   if (rec.status === "Expired / overdue") {
-    const m = Math.abs(rec.monthsToRecert ?? 0);
-    urgency = `This equipment is currently ${m} month${m !== 1 ? "s" : ""} past its 5-year recertification window. Prompt action is strongly recommended to maintain API compliance and operational safety. Please treat this as an urgent matter.`;
+    urgency = `This equipment is currently ${recertMagnitude(rec)} past its 5-year recertification window. Prompt action is strongly recommended to maintain API compliance and operational safety. Please treat this as an urgent matter.`;
     urgencyTone = "text-destructive";
   } else if (rec.status === "Due soon") {
-    urgency = `This equipment is approaching its 5-year recertification window in approximately ${rec.monthsToRecert} month${rec.monthsToRecert !== 1 ? "s" : ""}. We recommend scheduling recertification at your earliest convenience to avoid operational disruption.`;
+    urgency = `This equipment is approaching its 5-year recertification window in approximately ${recertMagnitude(rec)}. We recommend scheduling recertification at your earliest convenience to avoid operational disruption.`;
     urgencyTone = "text-warning";
   } else {
     urgency = `This equipment is currently within its mid-cycle service window. Scheduling a proactive inspection or recertification now may reduce lead times and ensure uninterrupted operations.`;
@@ -265,7 +281,7 @@ function EmailDraftDialog({
                           </span>
                           {g.part.description && (
                             <span className="text-xs text-muted-foreground">
-                              — {g.part.description}
+                              — <TruncatedText text={g.part.description} limit={80} />
                             </span>
                           )}
                         </div>
@@ -279,6 +295,58 @@ function EmailDraftDialog({
                                 {s}
                               </span>
                             ))}
+                          </div>
+                        )}
+                        {g.lotBatchNumbers.length > 0 && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                              Lot/Batch:
+                            </span>
+                            {g.lotBatchNumbers.map((s) => (
+                              <span
+                                key={s}
+                                className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                              >
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {g.expirationDate && (
+                          <div className="mt-1 text-[9px] text-muted-foreground">
+                            <span className="uppercase tracking-wide">Exp:</span> {g.expirationDate}
+                          </div>
+                        )}
+                        {g.soLotBatchExp && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                              S/O Lot &amp; Batch / Exp:
+                            </span>
+                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              {g.soLotBatchExp}
+                            </span>
+                          </div>
+                        )}
+                        {(g.invoiceNumber || g.workOrder) && (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-muted-foreground">
+                            {g.invoiceNumber && (
+                              <span>
+                                <span className="uppercase tracking-wide">Invoice:</span>{" "}
+                                <span className="font-mono">{g.invoiceNumber}</span>
+                              </span>
+                            )}
+                            {g.workOrder && (
+                              <span>
+                                <span className="uppercase tracking-wide">W.O.:</span>{" "}
+                                <span className="font-mono">{g.workOrder}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {g.specifications && (
+                          <div className="mt-1.5 border-t border-border/60 pt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                            <span className="font-semibold uppercase tracking-wide">Specs: </span>
+                            <TruncatedText text={g.specifications} limit={100} />
                           </div>
                         )}
                       </div>
@@ -489,6 +557,7 @@ export function RecommendationDetail({
   const [emailOpen, setEmailOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<RecommendationPatch>({});
+  const [expandedParts, setExpandedParts] = useState<Set<number>>(new Set());
   const [viewDoc, setViewDoc] = useState(false);
   const qc = useQueryClient();
 
@@ -538,10 +607,41 @@ export function RecommendationDetail({
       location: rec!.location ?? "",
       equipment: rec!.equipment ?? "",
       certificateDate: rec!.certificateDate ?? "",
+      testedDate: rec!.testedDate ?? "",
+      docLotBatchNumber: rec!.docLotBatchNumber ?? "",
+      docExpirationDate: rec!.docExpirationDate ?? "",
+      docCureDate: rec!.docCureDate ?? "",
+      applicableSpecs: rec!.applicableSpecs ?? "",
+      authorizedSignatory: rec!.authorizedSignatory ?? "",
+      signatoryTitle: rec!.signatoryTitle ?? "",
       serials: rec!.serials,
+      // Structured per-part rows are the source of truth. Older records with
+      // no lineItems yet get one synthesized per flat part number so every
+      // part is still individually editable rather than falling back to a
+      // single opaque serials list.
+      lineItems:
+        rec!.lineItems.length > 0
+          ? rec!.lineItems.map((li) => ({
+              ...li,
+              serials: [...li.serials],
+              lotBatchNumbers: [...li.lotBatchNumbers],
+            }))
+          : rec!.partNumbers.map((p) => ({
+              description: p.description,
+              partNumber: p.number,
+              qty: p.qty,
+              serials: [],
+              lotBatchNumbers: [],
+              expirationDate: null,
+              soLotBatchExp: null,
+              specifications: null,
+              invoiceNumber: null,
+              workOrder: null,
+            })),
       notes: rec!.notes ?? "",
       priority: rec!.priority as "High" | "Low" | "Manual review",
     });
+    setExpandedParts(new Set());
     setEditing(true);
   }
 
@@ -551,6 +651,62 @@ export function RecommendationDetail({
     saveMutation.reset();
   }
 
+  function toggleExpanded(index: number) {
+    setExpandedParts((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
+  function updateLineItem(index: number, patch: Partial<LineItem>) {
+    setDraft((prev) => {
+      const items = [...(prev.lineItems ?? [])];
+      items[index] = { ...items[index], ...patch };
+      return { ...prev, lineItems: items };
+    });
+  }
+
+  function addLineItem() {
+    const newIndex = (draft.lineItems ?? []).length;
+    setDraft((prev) => ({
+      ...prev,
+      lineItems: [
+        ...(prev.lineItems ?? []),
+        {
+          description: "",
+          partNumber: "",
+          qty: null,
+          serials: [],
+          lotBatchNumbers: [],
+          expirationDate: "",
+          soLotBatchExp: "",
+          specifications: "",
+          invoiceNumber: "",
+          workOrder: "",
+        },
+      ],
+    }));
+    // New parts start expanded so they can be filled in right away.
+    setExpandedParts((prev) => new Set(prev).add(newIndex));
+  }
+
+  function removeLineItem(index: number) {
+    setDraft((prev) => ({
+      ...prev,
+      lineItems: (prev.lineItems ?? []).filter((_, i) => i !== index),
+    }));
+    setExpandedParts((prev) => {
+      const next = new Set<number>();
+      prev.forEach((i) => {
+        if (i < index) next.add(i);
+        else if (i > index) next.add(i - 1);
+      });
+      return next;
+    });
+  }
+
   function handleSave() {
     // Strip empty strings → omit from patch (keep original value)
     const patch: RecommendationPatch = {};
@@ -558,6 +714,33 @@ export function RecommendationDetail({
     for (const [k, v] of Object.entries(d)) {
       if (k === "serials") {
         patch.serials = (v as string[]).filter(Boolean);
+      } else if (k === "lineItems") {
+        patch.lineItems = (v as LineItem[])
+          .map((li) => ({
+            ...li,
+            description: li.description?.trim() || null,
+            partNumber: li.partNumber?.trim() || null,
+            specifications: li.specifications?.trim() || null,
+            expirationDate: li.expirationDate?.trim() || null,
+            soLotBatchExp: li.soLotBatchExp?.trim() || null,
+            invoiceNumber: li.invoiceNumber?.trim() || null,
+            workOrder: li.workOrder?.trim() || null,
+            serials: li.serials.map((s) => s.trim()).filter(Boolean),
+            lotBatchNumbers: li.lotBatchNumbers.map((s) => s.trim()).filter(Boolean),
+          }))
+          .filter(
+            (li) =>
+              li.description ||
+              li.partNumber ||
+              li.qty != null ||
+              li.serials.length > 0 ||
+              li.lotBatchNumbers.length > 0 ||
+              li.expirationDate ||
+              li.soLotBatchExp ||
+              li.specifications ||
+              li.invoiceNumber ||
+              li.workOrder,
+          );
       } else if (k === "priority") {
         if (v) patch.priority = v as "High" | "Low" | "Manual review";
       } else if (typeof v === "string" && v.trim() !== "") {
@@ -617,7 +800,7 @@ export function RecommendationDetail({
       >
         <SheetContent
           side="right"
-          className={`border-l border-border bg-surface p-0 transition-all duration-300 ${viewDoc ? "w-full sm:max-w-[1200px] overflow-hidden flex flex-row" : "w-full sm:max-w-[640px] overflow-y-auto"}`}
+          className={`border-l border-border bg-surface p-0 transition-all duration-300 ${viewDoc ? "w-full sm:max-w-[1600px] overflow-hidden flex flex-row" : "w-full sm:max-w-[640px] overflow-y-auto"}`}
         >
           {/* ── DOCUMENT VIEWER PANEL (left side when active) ───────────── */}
           {viewDoc && (
@@ -796,46 +979,261 @@ export function RecommendationDetail({
 
                 <section>
                   <h3 className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-amber flex items-center gap-2">
-                    <Calendar className="size-3.5" /> Dates
+                    <ShieldCheck className="size-3.5" /> Certification
                   </h3>
-                  {field("certificateDate", "Certificate Date")}
+                  <div className="grid grid-cols-2 gap-4">
+                    {field("authorizedSignatory", "Authorized Signatory")}
+                    {field("signatoryTitle", "Signatory Title")}
+                  </div>
+                  <div className="mt-4">{field("applicableSpecs", "Applicable Specs", true)}</div>
                 </section>
 
                 <Separator className="bg-border" />
 
                 <section>
                   <h3 className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-amber flex items-center gap-2">
-                    <Hash className="size-3.5" /> Serials
+                    <Calendar className="size-3.5" /> Dates
                   </h3>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                        Serial / Lot Numbers
-                      </span>
-                      {rec.serials.length === 0 && (
-                        <span className="flex items-center gap-0.5 rounded bg-warning/15 px-1 py-px text-[9px] font-bold text-warning uppercase tracking-wide">
-                          <AlertTriangle className="size-2.5" /> missing
-                        </span>
-                      )}
-                    </div>
-                    <Input
-                      value={(draft.serials ?? []).join(", ")}
-                      onChange={(e) =>
-                        setDraft((p) => ({
-                          ...p,
-                          serials: e.target.value
-                            .split(",")
-                            .map((s) => s.trim())
-                            .filter(Boolean),
-                        }))
-                      }
-                      className={`h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50 ${rec.serials.length === 0 ? "border-warning/50" : ""}`}
-                      placeholder="e.g. SN-001, SN-002"
-                    />
-                    <p className="text-[10px] text-muted-foreground/60">
-                      Separate multiple serials with commas
-                    </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {field("certificateDate", "Certificate Date")}
+                    {field("testedDate", "Tested Date")}
                   </div>
+                </section>
+
+                <Separator className="bg-border" />
+
+                <section>
+                  <h3 className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-amber flex items-center gap-2">
+                    <Package className="size-3.5" /> Parts &amp; Serials
+                  </h3>
+
+                  {/* Document-wide metadata note */}
+                  <div className="mb-5 rounded-lg border border-amber/30 bg-amber/5 p-3">
+                    <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-amber">
+                      Document-wide note (applies to whole certificate, not one part)
+                    </span>
+                    <div className="grid grid-cols-3 gap-3">
+                      {field("docLotBatchNumber", "Lot / Batch")}
+                      {field("docExpirationDate", "Expiration")}
+                      {field("docCureDate", "Cure Date")}
+                    </div>
+                  </div>
+
+                  {/* Per-part rows */}
+                  <div className="space-y-2">
+                    {(draft.lineItems ?? []).map((li, i) => {
+                      const isExpanded = expandedParts.has(i);
+                      const summaryLabel =
+                        li.partNumber || li.description || `Part ${i + 1}`;
+                      return (
+                        <div
+                          key={i}
+                          className="rounded-lg border border-border/60 bg-background/40 overflow-hidden"
+                        >
+                          {/* Collapsed summary header — click to expand/collapse */}
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => toggleExpanded(i)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                toggleExpanded(i);
+                              }
+                            }}
+                            className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left cursor-pointer hover:bg-muted/40 transition-colors"
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              {isExpanded ? (
+                                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                              )}
+                              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                Part {i + 1}
+                              </span>
+                              <span className="truncate text-sm font-medium text-foreground">
+                                {summaryLabel}
+                              </span>
+                              {li.qty != null && (
+                                <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">
+                                  {li.qty}×
+                                </span>
+                              )}
+                              {li.serials.filter(Boolean).length > 0 && (
+                                <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">
+                                  {li.serials.filter(Boolean).length} serial
+                                  {li.serials.filter(Boolean).length !== 1 ? "s" : ""}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeLineItem(i);
+                              }}
+                              className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[10px] font-semibold text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              <Trash2 className="size-3" /> Remove
+                            </button>
+                          </div>
+
+                          {/* Expanded detail editor */}
+                          {isExpanded && (
+                            <div className="space-y-3 border-t border-border/60 p-3">
+                              <div className="space-y-1">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                  Description
+                                </span>
+                                <Textarea
+                                  value={li.description ?? ""}
+                                  onChange={(e) => updateLineItem(i, { description: e.target.value })}
+                                  rows={2}
+                                  className="resize-none text-sm bg-background/60 border-border/60 focus:border-primary/50"
+                                  placeholder="Part description…"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Part Number
+                                  </span>
+                                  <Input
+                                    value={li.partNumber ?? ""}
+                                    onChange={(e) => updateLineItem(i, { partNumber: e.target.value })}
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. PN-1234"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Qty
+                                  </span>
+                                  <Input
+                                    type="number"
+                                    value={li.qty ?? ""}
+                                    onChange={(e) =>
+                                      updateLineItem(i, {
+                                        qty: e.target.value === "" ? null : Number(e.target.value),
+                                      })
+                                    }
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. 2"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Serial / Lot Numbers
+                                  </span>
+                                  <Input
+                                    value={li.serials.join(", ")}
+                                    onChange={(e) =>
+                                      updateLineItem(i, {
+                                        serials: e.target.value.split(",").map((s) => s.trim()),
+                                      })
+                                    }
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. SN-001, SN-002"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Lot / Batch Numbers
+                                  </span>
+                                  <Input
+                                    value={li.lotBatchNumbers.join(", ")}
+                                    onChange={(e) =>
+                                      updateLineItem(i, {
+                                        lotBatchNumbers: e.target.value.split(",").map((s) => s.trim()),
+                                      })
+                                    }
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. B-100"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Expiration Date
+                                  </span>
+                                  <Input
+                                    value={li.expirationDate ?? ""}
+                                    onChange={(e) => updateLineItem(i, { expirationDate: e.target.value })}
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. 2027Q4"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    S/O Lot &amp; Batch / Exp. (combined)
+                                  </span>
+                                  <Input
+                                    value={li.soLotBatchExp ?? ""}
+                                    onChange={(e) => updateLineItem(i, { soLotBatchExp: e.target.value })}
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. 23810 / 4249260-12 / 3Q17"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Invoice
+                                  </span>
+                                  <Input
+                                    value={li.invoiceNumber ?? ""}
+                                    onChange={(e) => updateLineItem(i, { invoiceNumber: e.target.value })}
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. INV-200555"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                    Work Order
+                                  </span>
+                                  <Input
+                                    value={li.workOrder ?? ""}
+                                    onChange={(e) => updateLineItem(i, { workOrder: e.target.value })}
+                                    className="h-8 text-sm font-mono bg-background/60 border-border/60 focus:border-primary/50"
+                                    placeholder="e.g. W-115835"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                  Specifications
+                                </span>
+                                <Textarea
+                                  value={li.specifications ?? ""}
+                                  onChange={(e) => updateLineItem(i, { specifications: e.target.value })}
+                                  rows={2}
+                                  className="resize-none text-sm bg-background/60 border-border/60 focus:border-primary/50"
+                                  placeholder="Ratings / pressure / temperature / compliance block…"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={addLineItem}
+                    className="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-[11px] font-bold text-muted-foreground hover:border-primary/40 hover:text-primary"
+                  >
+                    <Plus className="size-3.5" /> Add Part
+                  </button>
                 </section>
 
                 <Separator className="bg-border" />
@@ -885,7 +1283,7 @@ export function RecommendationDetail({
                     <AlertTriangle className="mt-0.5 size-4 text-destructive" />
                     <div>
                       <div className="text-sm font-semibold text-destructive">
-                        Recertification overdue by {Math.abs(rec.monthsToRecert ?? 0)} months
+                        Recertification {formatRecertCountdown(rec)}
                       </div>
                       <div className="mt-1 text-xs text-destructive/80">
                         Recommend immediate outreach. Equipment is past its 5-year recertification
@@ -906,17 +1304,19 @@ export function RecommendationDetail({
                       label="Equipment"
                       value={(() => {
                         const equipments = getEquipmentNames(rec);
-                        if (equipments.length === 0) return null;
+                        const primary = rec.equipment || equipments[0];
+                        if (!primary) return null;
+                        const partCount = rec.lineItems?.length ?? 0;
                         return (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {equipments.map((eq, idx) => (
-                              <span
-                                key={idx}
-                                className="inline-block bg-slate-50 text-slate-800 border border-slate-200/60 rounded px-2 py-0.5 font-semibold text-[11px] leading-normal shadow-sm"
-                              >
-                                {eq}
-                              </span>
-                            ))}
+                          <div className="mt-1 space-y-1">
+                            <span className="inline-block bg-slate-50 text-slate-800 border border-slate-200/60 rounded px-2 py-0.5 font-semibold text-[11px] leading-normal shadow-sm">
+                              <TruncatedText text={primary} limit={120} />
+                            </span>
+                            {partCount > 1 && (
+                              <div className="text-[10px] text-muted-foreground">
+                                Full itemized breakdown ({partCount} parts) in Parts &amp; Serials below
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -926,6 +1326,27 @@ export function RecommendationDetail({
                     <Field label="Customer Purchase Order" value={rec.purchaseOrder} mono />
                   </div>
                 </section>
+
+                {(rec.applicableSpecs || rec.authorizedSignatory || rec.signatoryTitle) && (
+                  <>
+                    <Separator className="bg-border" />
+
+                    {/* Certification */}
+                    <section>
+                      <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber">
+                        <ShieldCheck className="size-3.5" /> Certification
+                      </h3>
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+                        <Field
+                          label="Applicable Specs"
+                          value={rec.applicableSpecs ? <TruncatedText text={rec.applicableSpecs} limit={140} /> : null}
+                        />
+                        <Field label="Authorized Signatory" value={rec.authorizedSignatory} />
+                        <Field label="Signatory Title" value={rec.signatoryTitle} />
+                      </div>
+                    </section>
+                  </>
+                )}
 
                 <Separator className="bg-border" />
 
@@ -953,11 +1374,29 @@ export function RecommendationDetail({
                   <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber">
                     <Package className="size-3.5" /> Parts & Serials
                   </h3>
+                  {(rec.docLotBatchNumber || rec.docExpirationDate || rec.docCureDate) && (
+                    <div className="mb-4 rounded-lg border border-amber/30 bg-amber/5 px-3 py-2 text-[11px] leading-relaxed text-slate-700">
+                      <span className="font-semibold uppercase tracking-wide text-amber">
+                        Document-wide note:
+                      </span>{" "}
+                      Certificate footer states
+                      {rec.docLotBatchNumber && <> lot/batch <span className="font-medium">{rec.docLotBatchNumber}</span></>}
+                      {rec.docLotBatchNumber && (rec.docExpirationDate || rec.docCureDate) && ","}
+                      {rec.docExpirationDate && <> expiration <span className="font-medium">{rec.docExpirationDate}</span></>}
+                      {rec.docExpirationDate && rec.docCureDate && ","}
+                      {rec.docCureDate && <> cure date <span className="font-medium">{rec.docCureDate}</span></>}
+                      {" "}for the certificate as a whole — not tied to a specific part below.
+                    </div>
+                  )}
                   {(() => {
                     const { groups, unattributedSerials } = groupSerialsByPart(rec);
                     if (groups.length === 0 && unattributedSerials.length === 0) {
                       return <span className="text-sm text-muted-foreground">—</span>;
                     }
+                    const hasLotBatch = groups.some((g) => g.lotBatchNumbers.length > 0);
+                    const hasExpiration = groups.some((g) => g.expirationDate);
+                    const hasSoLotBatchExp = groups.some((g) => g.soLotBatchExp);
+                    const hasInvoiceOrWorkOrder = groups.some((g) => g.invoiceNumber || g.workOrder);
                     return (
                       <div className="space-y-4">
                         <div className="flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -974,18 +1413,40 @@ export function RecommendationDetail({
                           <table className="w-full border-collapse text-left text-xs">
                             <thead>
                               <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500 select-none">
-                                <th className="py-2 px-3">Equipment Name</th>
+                                <th className="py-2 px-3">Description</th>
                                 <th className="py-2 px-3 w-[140px]">Part No</th>
                                 <th className="py-2 px-3 w-[60px] text-center">Qty</th>
                                 <th className="py-2 px-3 min-w-[140px]">Serial No</th>
+                                {hasLotBatch && (
+                                  <th className="py-2 px-3 min-w-[120px]">Lot/Batch No</th>
+                                )}
+                                {hasExpiration && (
+                                  <th className="py-2 px-3 w-[100px]">Exp.</th>
+                                )}
+                                {hasSoLotBatchExp && (
+                                  <th className="py-2 px-3 min-w-[150px]">S/O Lot &amp; Batch / Exp.</th>
+                                )}
+                                {hasInvoiceOrWorkOrder && (
+                                  <th className="py-2 px-3 min-w-[130px]">Invoice / W.O.</th>
+                                )}
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {groups.map((g) => (
                                 <tr key={g.part.number} className="hover:bg-slate-50/40 transition-colors">
-                                  {/* Equipment Name */}
-                                  <td className="py-2.5 px-3 text-slate-700 font-medium leading-normal">
-                                    {g.part.description ?? <span className="text-slate-400 italic font-normal">No description</span>}
+                                  {/* Description */}
+                                  <td className="py-2.5 px-3 max-w-[420px] text-slate-700 font-medium leading-normal">
+                                    {g.part.description ? (
+                                      <TruncatedText text={g.part.description} limit={160} />
+                                    ) : (
+                                      <span className="text-slate-400 italic font-normal">No description</span>
+                                    )}
+                                    {g.specifications && (
+                                      <div className="mt-1 border-t border-slate-100 pt-1 text-[10px] font-normal leading-relaxed text-slate-400">
+                                        <span className="font-semibold uppercase tracking-wide">Specs: </span>
+                                        <TruncatedText text={g.specifications} limit={100} />
+                                      </div>
+                                    )}
                                   </td>
                                   
                                   {/* Part No */}
@@ -1024,6 +1485,54 @@ export function RecommendationDetail({
                                       <span className="text-slate-300 font-mono text-[10px]">—</span>
                                     )}
                                   </td>
+
+                                  {/* Lot/Batch No */}
+                                  {hasLotBatch && (
+                                    <td className="py-2.5 px-3 align-middle">
+                                      {g.lotBatchNumbers.length > 0 ? (
+                                        <div className="flex flex-wrap gap-1">
+                                          {g.lotBatchNumbers.map((s) => (
+                                            <span
+                                              key={s}
+                                              className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-slate-600"
+                                            >
+                                              {s}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-300 font-mono text-[10px]">—</span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {/* Expiration */}
+                                  {hasExpiration && (
+                                    <td className="py-2.5 px-3 align-middle font-mono text-[10px] text-slate-600">
+                                      {g.expirationDate ?? <span className="text-slate-300">—</span>}
+                                    </td>
+                                  )}
+
+                                  {/* Combined S/O Lot & Batch / Exp. */}
+                                  {hasSoLotBatchExp && (
+                                    <td className="py-2.5 px-3 align-middle font-mono text-[10px] text-slate-600">
+                                      {g.soLotBatchExp ?? <span className="text-slate-300">—</span>}
+                                    </td>
+                                  )}
+
+                                  {/* Invoice / Work Order */}
+                                  {hasInvoiceOrWorkOrder && (
+                                    <td className="py-2.5 px-3 align-middle font-mono text-[10px] text-slate-600">
+                                      {g.invoiceNumber || g.workOrder ? (
+                                        <div className="space-y-0.5">
+                                          {g.invoiceNumber && <div>Inv: {g.invoiceNumber}</div>}
+                                          {g.workOrder && <div>W.O.: {g.workOrder}</div>}
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-300">—</span>
+                                      )}
+                                    </td>
+                                  )}
                                 </tr>
                               ))}
                             </tbody>

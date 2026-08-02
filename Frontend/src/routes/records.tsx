@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Recommendation } from "@/lib/wom-data";
-import { groupSerialsByPart, getEquipmentNames } from "@/lib/wom-data";
+import { groupSerialsByPart, getEquipmentNames, formatRecertCountdown } from "@/lib/wom-data";
 import {
   fetchRecommendations,
   deleteRecommendation,
@@ -60,6 +60,9 @@ import {
 type FilterKey = string;
 
 export const Route = createFileRoute("/records")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    recId: (search.recId as string | undefined) ?? undefined,
+  }),
   component: RecordsPage,
 });
 
@@ -98,6 +101,7 @@ function getConfidenceScore(r: {
 function RecordsPage() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const [selected, setSelected] = useState<Recommendation | null>(null);
   const [open, setOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -152,13 +156,13 @@ function RecordsPage() {
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["recommendations"],
     queryFn: fetchRecommendations,
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes (was 30s — too heavy on Firestore quota)
   });
 
   const { data: actions = [] } = useQuery<Action[]>({
     queryKey: ["actions"],
     queryFn: fetchActions,
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes (was 30s — too heavy on Firestore quota)
   });
 
   function getLinkedAction(recId: string) {
@@ -299,6 +303,17 @@ function RecordsPage() {
     setSelected(r);
     setOpen(true);
   };
+
+  // Deep-link support: if navigated here with ?recId=..., open that record's
+  // full details automatically once the data has loaded, then clear the
+  // param so it doesn't reopen on refresh/back-navigation.
+  useEffect(() => {
+    if (!search.recId || recommendations.length === 0) return;
+    const match = recommendations.find((r) => r.id === search.recId);
+    if (match) openDetail(match);
+    navigate({ to: "/records", search: {}, replace: true, resetScroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.recId, recommendations]);
 
   if (!user && !loading) return null;
 
@@ -1019,16 +1034,14 @@ function RecordsPage() {
                             <span
                               className={cn(
                                 "px-1.5 py-0.5 rounded font-bold border text-[11px] whitespace-nowrap",
-                                r.monthsToRecert < 0
+                                r.monthsToRecert < 0 || (r.monthsToRecert === 0 && (r.daysToRecert ?? 0) < 0)
                                   ? "bg-red-50 text-red-700 border-red-200"
                                   : r.monthsToRecert <= 3
                                     ? "bg-amber-50 text-amber-700 border-amber-200"
                                     : "bg-slate-50 text-slate-700 border-slate-200",
                               )}
                             >
-                              {r.monthsToRecert < 0
-                                ? `${Math.abs(r.monthsToRecert)} mo overdue`
-                                : `in ${r.monthsToRecert} mo`}
+                              {formatRecertCountdown(r)}
                             </span>
                           ) : (
                             <span className="text-slate-300/60">—</span>

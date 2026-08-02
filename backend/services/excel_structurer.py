@@ -1,4 +1,14 @@
-"""OpenAI-based extractor for Excel-only CoC fields."""
+"""OpenAI-based extractor for Excel-only CoC fields.
+
+Only extracts fields that genuinely don't exist anywhere else in the
+structured pipeline (issuer/contact details from the certificate header).
+Do NOT add fields here that mix distinct concepts into one free-text string
+(e.g. a combined "serialization" bucket smashing true serials + lot/batch +
+cure date + expiry together) — those belong as separate, properly attributed
+fields on the main `Recommendation`/`LineItem` models (see docLotBatchNumber/
+docExpirationDate/docCureDate and per-lineItem lotBatchNumbers/expirationDate/
+soLotBatchExp), not as a single guessed string here.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -19,15 +29,10 @@ Extract the following fields and return a single JSON object (use null if not fo
 - address: issuing company's address (street, city, country)
 - phone: issuing company's main phone number
 - fax: issuing company's fax number
-- serialization: serialization or traceability information (heat numbers, lot numbers, batch numbers as a single string)
-- applicableSpecs: applicable standards or specifications (e.g. "API 6A", "ASME B16.5") — comma-separated string
-- authorizedSignatory: name of the person who signed/authorized the certificate
-- signatoryTitle: job title of the authorized signatory
-- totalItems: total number of line items or parts listed on the certificate (integer or null)
 
 RULES:
 1. Return ONLY the JSON object, no markdown fences, no explanation.
-2. All fields are strings unless noted otherwise.
+2. All fields are strings.
 3. Do not invent data — use null if genuinely absent.
 """.strip()
 
@@ -49,11 +54,6 @@ def extract_extra_fields_sync(text: str | None) -> dict[str, Any]:
         "address": None,
         "phone": None,
         "fax": None,
-        "serialization": None,
-        "applicableSpecs": None,
-        "authorizedSignatory": None,
-        "signatoryTitle": None,
-        "totalItems": None,
     }
     if not text:
         return empty
