@@ -45,18 +45,121 @@ def _is_spec_block_text(text: str) -> bool:
     return any(marker in t for marker in _SPEC_BLOCK_MARKERS)
 
 
-def _build_confirmed_line_items(tables) -> list[dict]:
+def _cell_span_bounds(cell) -> tuple[int, int] | None:
+    """Cell's (start, end) offset range in DI's shared reading-order content."""
+    spans = getattr(cell, "spans", None) or []
+    if not spans:
+        return None
+    return min(s.offset for s in spans), max(s.offset + s.length for s in spans)
+
+
+def _cell_geometry(cell) -> tuple[int, float, float, float, float] | None:
+    """Cell's (page_number, min_x, max_x, min_y, max_y) from its bounding region."""
+    regions = getattr(cell, "bounding_regions", None) or []
+    if not regions or not regions[0].polygon:
+        return None
+    poly = regions[0].polygon
+    xs, ys = poly[0::2], poly[1::2]
+    return regions[0].page_number, min(xs), max(xs), min(ys), max(ys)
+
+
+def _line_geometry(line) -> tuple[float, float, float, float] | None:
+    """Line's (min_x, max_x, min_y, max_y) from its polygon."""
+    poly = getattr(line, "polygon", None)
+    if not poly:
+        return None
+    xs, ys = poly[0::2], poly[1::2]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _attach_geometric_descriptions(
+    row_starts: list[int],
+    row_geometry: dict[int, tuple[int, float, float]],
+    table_x_range: tuple[float, float],
+    pages,
+    items: list[dict],
+) -> None:
+    """
+    Fill in each item's description purely from bounding-region position,
+    for tables where Document Intelligence recognized NO description column
+    at all (the description text was segmented as free-standing page lines,
+    not table cells) — the exact shape of the reported bug: a stray
+    reference line between two rows was being matched to the wrong item by
+    the LLM's free-text order guessing, because nothing structural
+    constrained which line belonged to which row.
+
+    Each row-start's own cells (ITEMS/QTY/PART NO.) give a reliable vertical
+    band on the page (top Y to the next row-start's top Y, or its own
+    bottom Y for the last row). Any page line whose top Y falls in that band
+    AND whose horizontal position does not overlap the table's own column
+    area belongs to that row — first such line is the primary description,
+    any further lines are continuations — with zero text/keyword matching.
+    """
+    windows: list[tuple[int, float, float] | None] = []
+    for pos, row_idx in enumerate(row_starts):
+        geom = row_geometry.get(row_idx)
+        if geom is None:
+            windows.append(None)
+            continue
+        page_no, top_y, bottom_y = geom
+        next_geom = row_geometry.get(row_starts[pos + 1]) if pos + 1 < len(row_starts) else None
+        upper = next_geom[1] if next_geom else bottom_y
+        windows.append((page_no, top_y, upper))
+
+    table_x0, table_x1 = table_x_range
+    for page in pages or []:
+        for line in page.lines or []:
+            geom = _line_geometry(line)
+            if geom is None:
+                continue
+            x0, x1, y0, _y1 = geom
+            if x0 <= table_x1 and table_x0 <= x1:
+                continue  # overlaps the table's own column area, not free description text
+            val = (line.content or "").strip()
+            if not val:
+                continue
+            for pos, window in enumerate(windows):
+                if window is None or window[0] != page.page_number:
+                    continue
+                _, top, upper = window
+                if top <= y0 < upper:
+                    item = items[pos]
+                    if item["_spec_mode"] or _is_spec_block_text(val):
+                        item["_spec_mode"] = True
+                        item["specifications"] = ((item["specifications"] or "") + " " + val).strip()
+                    elif not item["knownDescription"]:
+                        item["knownDescription"] = val
+                    else:
+                        item["knownDescription"] = (item["knownDescription"] + " " + val).strip()
+                    break
+
+    for item in items:
+        if not item["knownDescription"]:
+            item["needsReview"] = True
+
+
+def _build_confirmed_line_items(tables, pages=None) -> list[dict]:
     """
     Deterministically group Document Intelligence table rows into line items.
 
     Uses each table's own row/column structure — not free text — to decide
-    row boundaries: a row is a CONTINUATION of the previous row when its
+    row boundaries: a row is a CONTINUATION of a row-start when its
     index-like columns (an "ITEMS"/index column and/or a "QTY" column) are
     blank, regardless of what appears in other columns (e.g. a secondary
     part/reference number printed in the PART NO. column slot). This removes
     the ambiguity that otherwise forces the LLM to guess where one BOM/parts
     row ends and the next begins — the exact mistake that caused a single
     row to be split into multiple fabricated line items.
+
+    Row-starts and their continuations are ordered/attached using each
+    cell's ``spans`` offset into DI's shared reading-order content, not the
+    raw ``row_index`` integer. The table-structure model that assigns
+    row_index is a separate model from the one that determines reading
+    order, and on scanned/borderless layouts it can mislabel which row_index
+    a wrapped/unlabeled cell belongs to (e.g. a stray lot/heat reference with
+    no ITEMS/QTY of its own) — attaching by span position instead of
+    row_index self-corrects that mislabeling, since span offsets always
+    reflect true document position, without any text/keyword heuristics.
 
     Column roles are inferred generically from header text ("description",
     "qty"/"quantity", "part", "item") so this works across different CoC
@@ -69,12 +172,20 @@ def _build_confirmed_line_items(tables) -> list[dict]:
     for table in tables or []:
         cells_by_row: dict[int, dict[int, str]] = {}
         header_by_col: dict[int, str] = {}
+        row_span_bounds: dict[int, tuple[int, int]] = {}
         for cell in table.cells or []:
             content = (cell.content or "").replace("\n", " ").strip()
             cells_by_row.setdefault(cell.row_index, {})[cell.column_index] = content
             if getattr(cell, "kind", None) == "columnHeader" or cell.row_index == 0:
                 existing = header_by_col.get(cell.column_index, "")
                 header_by_col[cell.column_index] = (existing + " " + content).strip()
+            bounds = _cell_span_bounds(cell)
+            if bounds is not None:
+                existing_bounds = row_span_bounds.get(cell.row_index)
+                row_span_bounds[cell.row_index] = (
+                    (min(existing_bounds[0], bounds[0]), max(existing_bounds[1], bounds[1]))
+                    if existing_bounds is not None else bounds
+                )
 
         roles: dict[int, str] = {}
         for col, header in header_by_col.items():
@@ -131,7 +242,13 @@ def _build_confirmed_line_items(tables) -> list[dict]:
                 return any(row.get(c, "").strip() for c in index_cols)
             return bool(row.get(partno_col, "").strip())
 
-        sorted_row_indices = sorted(i for i in cells_by_row.keys() if i != 0)
+        def row_position(idx: int) -> int:
+            # Rows with no span info (rare) keep their row_index position
+            # instead of being reordered blindly.
+            bounds = row_span_bounds.get(idx)
+            return bounds[0] if bounds is not None else idx
+
+        sorted_row_indices = sorted((i for i in cells_by_row.keys() if i != 0), key=row_position)
 
         # Table headers can wrap onto more than one physical row (e.g. "Rev."
         # on row 0 and "No." continuing on row 1, or "(if applicable)" split
@@ -140,103 +257,144 @@ def _build_confirmed_line_items(tables) -> list[dict]:
         # as part of the header block and skip it, instead of only skipping
         # row_index 0 — otherwise a leading header-continuation row gets
         # mistaken for a real (blank) line item.
-        first_data_row = next(
-            (idx for idx in sorted_row_indices if is_row_start(cells_by_row[idx])),
+        first_data_pos = next(
+            (pos for pos, idx in enumerate(sorted_row_indices) if is_row_start(cells_by_row[idx])),
             None,
         )
-        if first_data_row is None:
+        if first_data_pos is None:
             continue  # no recognizable data rows in this table
 
-        current_item: dict | None = None
-        for row_idx in sorted_row_indices:
-            if row_idx < first_data_row:
-                continue
+        # Fully blank rows (spacer/section-divider rows within the table)
+        # carry no information — drop them before grouping instead of
+        # letting them start a bogus item.
+        data_rows = [
+            idx for idx in sorted_row_indices[first_data_pos:]
+            if any(v.strip() for v in cells_by_row[idx].values())
+        ]
+        row_starts = [idx for idx in data_rows if is_row_start(cells_by_row[idx])]
+        row_start_set = set(row_starts)
+
+        for pos, row_idx in enumerate(row_starts):
             row = cells_by_row[row_idx]
-            # Fully blank rows (spacer/section-divider rows within the table)
-            # carry no information — skip them entirely rather than letting
-            # them start a bogus item when there's no current item to merge
-            # into yet.
-            if not any(v.strip() for v in row.values()):
-                continue
-            if current_item is None or is_row_start(row):
-                if current_item is not None:
-                    results.append(current_item)
-                qty_raw = row.get(qty_col, "").strip() if qty_col is not None else ""
-                try:
-                    qty_val = int(qty_raw) if qty_raw else None
-                except ValueError:
-                    qty_val = None
-                current_item = {
-                    "partNumber": row.get(partno_col, "").strip() or None,
-                    "qty": qty_val,
-                    "knownDescription": row.get(desc_col, "").strip() if desc_col is not None else "",
-                    "specifications": None,
-                    "_spec_mode": False,
-                    "serial": None,
-                    "lotBatch": None,
-                    "expiration": None,
-                    "combined": None,
-                    "invoice": None,
-                    "workOrder": None,
-                }
-                # Capture serial/lot-batch/expiration/combined columns already
-                # present on this SAME starting row (most BOM rows are a
-                # single physical row with no continuation — without this,
-                # that sibling-column data was silently dropped whenever
-                # there was no wrapped continuation row to carry it via the
-                # branch below). Columns that don't match any known role
-                # (e.g. "Rev. No.", "PR Level") are intentionally ignored —
-                # they aren't serial/lot/expiration data and would only add
-                # noise for the LLM to misclassify.
-                if serial_col is not None and row.get(serial_col, "").strip():
-                    current_item["serial"] = row[serial_col].strip()
-                if lotbatch_col is not None and row.get(lotbatch_col, "").strip():
-                    current_item["lotBatch"] = row[lotbatch_col].strip()
-                if expiration_col is not None and row.get(expiration_col, "").strip():
-                    current_item["expiration"] = row[expiration_col].strip()
-                if combined_col is not None and row.get(combined_col, "").strip():
-                    current_item["combined"] = row[combined_col].strip()
-                if invoice_col is not None and row.get(invoice_col, "").strip():
-                    current_item["invoice"] = row[invoice_col].strip()
-                if workorder_col is not None and row.get(workorder_col, "").strip():
-                    current_item["workOrder"] = row[workorder_col].strip()
-            else:
-                for col, val in row.items():
+            qty_raw = row.get(qty_col, "").strip() if qty_col is not None else ""
+            try:
+                qty_val = int(qty_raw) if qty_raw else None
+            except ValueError:
+                qty_val = None
+            item = {
+                "partNumber": row.get(partno_col, "").strip() or None,
+                "qty": qty_val,
+                "knownDescription": row.get(desc_col, "").strip() if desc_col is not None else "",
+                "specifications": None,
+                "_spec_mode": False,
+                "serial": None,
+                "lotBatch": None,
+                "expiration": None,
+                "combined": None,
+                "invoice": None,
+                "workOrder": None,
+                "needsReview": False,
+            }
+            # Capture serial/lot-batch/expiration/combined columns already
+            # present on this SAME starting row (most BOM rows are a
+            # single physical row with no continuation — without this,
+            # that sibling-column data was silently dropped whenever
+            # there was no wrapped continuation row to carry it via the
+            # loop below). Columns that don't match any known role
+            # (e.g. "Rev. No.", "PR Level") are intentionally ignored —
+            # they aren't serial/lot/expiration data and would only add
+            # noise for the LLM to misclassify.
+            if serial_col is not None and row.get(serial_col, "").strip():
+                item["serial"] = row[serial_col].strip()
+            if lotbatch_col is not None and row.get(lotbatch_col, "").strip():
+                item["lotBatch"] = row[lotbatch_col].strip()
+            if expiration_col is not None and row.get(expiration_col, "").strip():
+                item["expiration"] = row[expiration_col].strip()
+            if combined_col is not None and row.get(combined_col, "").strip():
+                item["combined"] = row[combined_col].strip()
+            if invoice_col is not None and row.get(invoice_col, "").strip():
+                item["invoice"] = row[invoice_col].strip()
+            if workorder_col is not None and row.get(workorder_col, "").strip():
+                item["workOrder"] = row[workorder_col].strip()
+
+            # This item's span "block": every OTHER row (continuation, at ANY
+            # row_index) whose own span falls inside this range belongs to
+            # THIS item — regardless of what row_index DI assigned it. This
+            # lets a wrapped cell that DI mislabeled with an out-of-sequence
+            # row_index still attach to the correct item, instead of merging
+            # into whichever item happened to be "current" in row_index order.
+            lo = row_position(row_idx)
+            hi = row_position(row_starts[pos + 1]) if pos + 1 < len(row_starts) else float("inf")
+
+            for cont_idx in data_rows:
+                if cont_idx in row_start_set or not (lo <= row_position(cont_idx) < hi):
+                    continue
+                cont_row = cells_by_row[cont_idx]
+                for col, val in cont_row.items():
                     val = val.strip()
                     if not val:
                         continue
                     if col == desc_col:
-                        if current_item["_spec_mode"] or _is_spec_block_text(val):
-                            current_item["_spec_mode"] = True
-                            current_item["specifications"] = (
-                                (current_item["specifications"] or "") + " " + val
-                            ).strip()
+                        if item["_spec_mode"] or _is_spec_block_text(val):
+                            item["_spec_mode"] = True
+                            item["specifications"] = ((item["specifications"] or "") + " " + val).strip()
                         else:
-                            current_item["knownDescription"] = (current_item["knownDescription"] + " " + val).strip()
+                            item["knownDescription"] = (item["knownDescription"] + " " + val).strip()
                     elif col == serial_col:
-                        current_item["serial"] = ((current_item["serial"] or "") + " " + val).strip()
+                        item["serial"] = ((item["serial"] or "") + " " + val).strip()
                     elif col == lotbatch_col:
-                        current_item["lotBatch"] = ((current_item["lotBatch"] or "") + " " + val).strip()
+                        item["lotBatch"] = ((item["lotBatch"] or "") + " " + val).strip()
                     elif col == expiration_col:
-                        current_item["expiration"] = ((current_item["expiration"] or "") + " " + val).strip()
+                        item["expiration"] = ((item["expiration"] or "") + " " + val).strip()
                     elif col == combined_col:
-                        current_item["combined"] = ((current_item["combined"] or "") + " " + val).strip()
+                        item["combined"] = ((item["combined"] or "") + " " + val).strip()
                     elif col == invoice_col:
-                        current_item["invoice"] = ((current_item["invoice"] or "") + " " + val).strip()
+                        item["invoice"] = ((item["invoice"] or "") + " " + val).strip()
                     elif col == workorder_col:
-                        current_item["workOrder"] = ((current_item["workOrder"] or "") + " " + val).strip()
+                        item["workOrder"] = ((item["workOrder"] or "") + " " + val).strip()
                     elif col == partno_col and serial_col is None and combined_col is None:
                         # Some templates print a secondary reference/serial
                         # number in the PART NO. column slot on a wrapped
                         # continuation row (no dedicated serial column at
                         # all) — treat it as this item's serial rather than
                         # dropping it.
-                        current_item["serial"] = ((current_item["serial"] or "") + " " + val).strip()
+                        item["serial"] = ((item["serial"] or "") + " " + val).strip()
                     # else: ignore other unclassified columns (Rev, PR Level,
                     # etc.) — noise, not part of this data model.
 
-        if current_item is not None:
-            results.append(current_item)
+            # A description column exists in this table, but nothing in this
+            # item's span block carried description text — a structural gap
+            # DI itself couldn't resolve. Flag it instead of letting
+            # free-text matching guess and risk attaching the wrong nearby
+            # line (the exact failure this replaces).
+            if desc_col is not None and not item["knownDescription"]:
+                item["needsReview"] = True
+
+            results.append(item)
+
+        # This table has NO description column at all in its own cell
+        # structure (desc_col is None) — reconstruct descriptions from
+        # bounding-region geometry instead of leaving every item MISSING for
+        # the LLM to guess from a flattened, unlinked text stream.
+        if desc_col is None and pages:
+            row_geometry: dict[int, tuple[int, float, float]] = {}
+            xs_all: list[float] = []
+            for cell in table.cells or []:
+                geom = _cell_geometry(cell)
+                if geom is None:
+                    continue
+                page_no, x0, x1, y0, y1 = geom
+                xs_all.extend((x0, x1))
+                existing = row_geometry.get(cell.row_index)
+                row_geometry[cell.row_index] = (
+                    (page_no, min(existing[1], y0), max(existing[2], y1))
+                    if existing is not None else (page_no, y0, y1)
+                )
+            if xs_all and row_starts:
+                table_x_range = (min(xs_all), max(xs_all))
+                _attach_geometric_descriptions(
+                    row_starts, row_geometry, table_x_range, pages, results[-len(row_starts):]
+                )
 
     return results
 
@@ -252,12 +410,20 @@ def _render_confirmed_items_block(items: list[dict]) -> str:
         "specifications values shown below, are AUTHORITATIVE; do not "
         "re-split, merge, re-derive, or change them. Only fill in "
         "'description' where marked MISSING, using the plain document text "
-        "below in the same top-to-bottom order. Never fold a "
+        "below in the same top-to-bottom order. Where marked NOT FOUND IN "
+        "DOCUMENT STRUCTURE, leave description null instead — do not search "
+        "free text for it. Never fold a "
         "'specifications' value into 'description' — they are separate "
         "fields.)---"
     ]
     for i, item in enumerate(items, start=1):
-        desc = item["knownDescription"] or "(MISSING — find matching text in document)"
+        if item.get("needsReview"):
+            desc = (
+                "(NOT FOUND IN DOCUMENT STRUCTURE — leave description null; "
+                "do NOT guess it from surrounding text)"
+            )
+        else:
+            desc = item["knownDescription"] or "(MISSING — find matching text in document)"
         parts = [f"Item {i}: partNumber={item['partNumber']} | qty={item['qty']} | description={desc}"]
         if item.get("serial"):
             parts.append(f"serial={item['serial']}")
@@ -321,7 +487,7 @@ async def extract_text(file_bytes: bytes, filename: str) -> tuple[str, bool]:
 
         text = "\n".join(lines).strip()
 
-        confirmed_items = _build_confirmed_line_items(result.tables)
+        confirmed_items = _build_confirmed_line_items(result.tables, result.pages)
         confirmed_block = _render_confirmed_items_block(confirmed_items)
         if confirmed_block:
             text = text + "\n\n" + confirmed_block

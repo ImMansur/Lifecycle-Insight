@@ -115,6 +115,13 @@ Extract the following fields (use null when not found):
   material, dimensions, product name — that belongs to that item, and use it
   as the description. Never use a part number, index, or reference number as
   the description; if genuinely no description text exists, use null.
+  If an item's description instead shows
+  "(NOT FOUND IN DOCUMENT STRUCTURE — leave description null; do NOT guess it
+  from surrounding text)", this table does have its own description column
+  but nothing could be structurally resolved for that specific row — set
+  "description": null for it. Do NOT search the plain text for a substitute;
+  guessing here is what previously caused a wrong description to cascade onto
+  every following row.
   If no "---CONFIRMED LINE ITEMS---" section is present, fall back to
   inferring line items directly from the plain text: lines that do not begin
   a new item/quantity/part-number entry are continuations of the previous

@@ -231,11 +231,11 @@ def _check_page_limit(file_bytes: bytes, filename: str, ext: str) -> str | None:
     return None
 
 
-def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str, str]]:
+def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str]]:
     cust = (rec.customer or "").strip().lower()
     so = (rec.salesOrder or "").strip().lower()
     cert = (rec.certificateDate or "").strip()
-    if not cust or not so or not cert:
+    if not cust or not so:
         return set()
 
     keys = set()
@@ -243,29 +243,23 @@ def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str, 
     if rec.lineItems:
         for item in rec.lineItems:
             pn = (item.partNumber or "").strip().lower()
-            if item.serials:
-                for ser in item.serials:
-                    s = ser.strip().lower()
-                    if pn or s:
-                        keys.add((cust, so, cert, pn, s))
-            else:
-                if pn:
-                    keys.add((cust, so, cert, pn, ""))
+            desc = (item.description or "").strip().lower()
+            val = pn if pn else desc
+            if val:
+                keys.add((cust, so, cert, val))
 
     # 2. Fall back to flat arrays if no keys were generated from lineItems
     if not keys:
-        parts = [p.number.strip().lower() for p in rec.partNumbers if p.number]
-        serials = [s.strip().lower() for s in rec.serials if s]
-        if parts and serials:
-            for p in parts:
-                for s in serials:
-                    keys.add((cust, so, cert, p, s))
-        elif parts:
-            for p in parts:
-                keys.add((cust, so, cert, p, ""))
-        elif serials:
-            for s in serials:
-                keys.add((cust, so, cert, "", s))
+        for p in rec.partNumbers:
+            pn = (p.number or "").strip().lower()
+            desc = (p.description or "").strip().lower()
+            val = pn if pn else desc
+            if val:
+                keys.add((cust, so, cert, val))
+
+    # 3. Fall back to empty string for part/item if still empty
+    if not keys:
+        keys.add((cust, so, cert, ""))
 
     return keys
 
@@ -283,10 +277,16 @@ async def background_ingest_files(
         pending: list[PendingDuplicate] = []
 
         all_existing = recommendation_store.all()
-        existing_by_combo: dict[tuple[str, str, str, str, str], Recommendation] = {}
+        existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
         for r in all_existing:
-            for combo in _get_combination_keys(r):
-                existing_by_combo[combo] = r
+            cust = (r.customer or "").strip().lower()
+            so = (r.salesOrder or "").strip().lower()
+            cert = (r.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                if g_key not in existing_by_group:
+                    existing_by_group[g_key] = []
+                existing_by_group[g_key].append(r)
 
         # 1. Read files and delete temp files
         valid_files: list[tuple[bytes, str, str]] = []
@@ -326,12 +326,20 @@ async def background_ingest_files(
                 continue
 
             existing = recommendation_store.get(rec.id)
-            new_combos = _get_combination_keys(rec)
-            if existing is None and new_combos:
-                for combo in new_combos:
-                    if combo in existing_by_combo:
-                        existing = existing_by_combo[combo]
-                        break
+            if existing is None:
+                cust = (rec.customer or "").strip().lower()
+                so = (rec.salesOrder or "").strip().lower()
+                cert = (rec.certificateDate or "").strip()
+                if cust and so:
+                    g_key = (cust, so, cert)
+                    candidates = existing_by_group.get(g_key, [])
+                    new_keys = _get_combination_keys(rec)
+                    if new_keys and candidates:
+                        for r in candidates:
+                            r_keys = _get_combination_keys(r)
+                            if new_keys.issubset(r_keys):
+                                existing = r
+                                break
 
             if existing is not None:
                 pending.append(PendingDuplicate(
@@ -344,8 +352,15 @@ async def background_ingest_files(
                 ))
                 continue
 
-            for combo in new_combos:
-                existing_by_combo[combo] = rec
+            cust = (rec.customer or "").strip().lower()
+            so = (rec.salesOrder or "").strip().lower()
+            cert = (rec.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                if g_key not in existing_by_group:
+                    existing_by_group[g_key] = []
+                existing_by_group[g_key].append(rec)
+
             results.append(rec)
             recommendation_store.add(rec)
 
@@ -396,10 +411,16 @@ async def background_ingest_from_blob(
         pending: list[PendingDuplicate] = []
 
         all_existing = recommendation_store.all()
-        existing_by_combo: dict = {}
+        existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
         for r in all_existing:
-            for combo in _get_combination_keys(r):
-                existing_by_combo[combo] = r
+            cust = (r.customer or "").strip().lower()
+            so = (r.salesOrder or "").strip().lower()
+            cert = (r.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                if g_key not in existing_by_group:
+                    existing_by_group[g_key] = []
+                existing_by_group[g_key].append(r)
 
         # Process concurrently (concurrency limit = 5)
         import asyncio
@@ -421,12 +442,20 @@ async def background_ingest_from_blob(
                 continue
 
             existing = recommendation_store.get(rec.id)
-            new_combos = _get_combination_keys(rec)
-            if existing is None and new_combos:
-                for combo in new_combos:
-                    if combo in existing_by_combo:
-                        existing = existing_by_combo[combo]
-                        break
+            if existing is None:
+                cust = (rec.customer or "").strip().lower()
+                so = (rec.salesOrder or "").strip().lower()
+                cert = (rec.certificateDate or "").strip()
+                if cust and so:
+                    g_key = (cust, so, cert)
+                    candidates = existing_by_group.get(g_key, [])
+                    new_keys = _get_combination_keys(rec)
+                    if new_keys and candidates:
+                        for r in candidates:
+                            r_keys = _get_combination_keys(r)
+                            if new_keys.issubset(r_keys):
+                                existing = r
+                                break
 
             if existing is not None:
                 pending.append(PendingDuplicate(
@@ -439,8 +468,15 @@ async def background_ingest_from_blob(
                 ))
                 continue
 
-            for combo in new_combos:
-                existing_by_combo[combo] = rec
+            cust = (rec.customer or "").strip().lower()
+            so = (rec.salesOrder or "").strip().lower()
+            cert = (rec.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                if g_key not in existing_by_group:
+                    existing_by_group[g_key] = []
+                existing_by_group[g_key].append(rec)
+
             results.append(rec)
             recommendation_store.add(rec)
 
@@ -488,12 +524,18 @@ async def background_process_chunk(
 ):
     try:
         all_existing = recommendation_store.all()
-        existing_by_combo: dict = {}
+        existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
         for r in all_existing:
-            for combo in _get_combination_keys(r):
-                existing_by_combo[combo] = r
+            cust = (r.customer or "").strip().lower()
+            so = (r.salesOrder or "").strip().lower()
+            cert = (r.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                if g_key not in existing_by_group:
+                    existing_by_group[g_key] = []
+                existing_by_group[g_key].append(r)
 
-        rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id, user_info)
+        rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_group, upload_id, user_info)
         
         # Load progress state from filesystem or local memory
         store = upload_progress_store_fs.get(upload_id) or upload_progress_store.get(upload_id)
@@ -616,10 +658,16 @@ async def ingest_files(
     pending: list[PendingDuplicate] = []
 
     all_existing = recommendation_store.all()
-    existing_by_combo: dict[tuple[str, str, str, str, str], Recommendation] = {}
+    existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
     for r in all_existing:
-        for combo in _get_combination_keys(r):
-            existing_by_combo[combo] = r
+        cust = (r.customer or "").strip().lower()
+        so = (r.salesOrder or "").strip().lower()
+        cert = (r.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            if g_key not in existing_by_group:
+                existing_by_group[g_key] = []
+            existing_by_group[g_key].append(r)
 
     # 1. Read files and validate size sequentially to protect memory/limits
     total_batch_size = 0
@@ -706,12 +754,20 @@ async def ingest_files(
             continue
 
         existing = recommendation_store.get(rec.id)
-        new_combos = _get_combination_keys(rec)
-        if existing is None and new_combos:
-            for combo in new_combos:
-                if combo in existing_by_combo:
-                    existing = existing_by_combo[combo]
-                    break
+        if existing is None:
+            cust = (rec.customer or "").strip().lower()
+            so = (rec.salesOrder or "").strip().lower()
+            cert = (rec.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                candidates = existing_by_group.get(g_key, [])
+                new_keys = _get_combination_keys(rec)
+                if new_keys and candidates:
+                    for r in candidates:
+                        r_keys = _get_combination_keys(r)
+                        if new_keys.issubset(r_keys):
+                            existing = r
+                            break
 
         if existing is not None:
             pending.append(PendingDuplicate(
@@ -724,8 +780,15 @@ async def ingest_files(
             ))
             continue
 
-        for combo in new_combos:
-            existing_by_combo[combo] = rec
+        cust = (rec.customer or "").strip().lower()
+        so = (rec.salesOrder or "").strip().lower()
+        cert = (rec.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            if g_key not in existing_by_group:
+                existing_by_group[g_key] = []
+            existing_by_group[g_key].append(rec)
+
         results.append(rec)
         recommendation_store.add(rec)
 
@@ -851,7 +914,7 @@ async def _process_one_file(
     file_bytes: bytes,
     filename: str,
     blob_url: str | None,
-    existing_by_combo: dict,
+    existing_by_group: dict[tuple[str, str, str], list[Recommendation]],
     upload_id: str | None = None,
     user_info: dict | None = None,
 ) -> tuple[Recommendation | None, PendingDuplicate | None, str | None]:
@@ -868,12 +931,20 @@ async def _process_one_file(
         return None, None, f"{filename}: processing failed"
 
     existing = recommendation_store.get(rec.id)
-    new_combos = _get_combination_keys(rec)
-    if existing is None and new_combos:
-        for combo in new_combos:
-            if combo in existing_by_combo:
-                existing = existing_by_combo[combo]
-                break
+    if existing is None:
+        cust = (rec.customer or "").strip().lower()
+        so = (rec.salesOrder or "").strip().lower()
+        cert = (rec.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            candidates = existing_by_group.get(g_key, [])
+            new_keys = _get_combination_keys(rec)
+            if new_keys and candidates:
+                for r in candidates:
+                    r_keys = _get_combination_keys(r)
+                    if new_keys.issubset(r_keys):
+                        existing = r
+                        break
 
     if existing is not None:
         return None, PendingDuplicate(
@@ -885,8 +956,15 @@ async def _process_one_file(
             newRecommendation=rec,
         ), None
 
-    for combo in new_combos:
-        existing_by_combo[combo] = rec
+    cust = (rec.customer or "").strip().lower()
+    so = (rec.salesOrder or "").strip().lower()
+    cert = (rec.certificateDate or "").strip()
+    if cust and so:
+        g_key = (cust, so, cert)
+        if g_key not in existing_by_group:
+            existing_by_group[g_key] = []
+        existing_by_group[g_key].append(rec)
+
     recommendation_store.add(rec)
     return rec, None, None
 
@@ -989,12 +1067,18 @@ async def ingest_chunk(
 
     # Synchronous fallback
     all_existing = recommendation_store.all()
-    existing_by_combo: dict = {}
+    existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
     for r in all_existing:
-        for combo in _get_combination_keys(r):
-            existing_by_combo[combo] = r
+        cust = (r.customer or "").strip().lower()
+        so = (r.salesOrder or "").strip().lower()
+        cert = (r.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            if g_key not in existing_by_group:
+                existing_by_group[g_key] = []
+            existing_by_group[g_key].append(r)
 
-    rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_combo, upload_id, user_info)
+    rec, dup, err = await _process_one_file(file_bytes, filename, blob_url, existing_by_group, upload_id, user_info)
 
     return IngestResponse(
         processed=1 if rec else 0,
@@ -1047,10 +1131,16 @@ async def ingest_from_blob(
     pending: list[PendingDuplicate] = []
 
     all_existing = recommendation_store.all()
-    existing_by_combo: dict = {}
+    existing_by_group: dict[tuple[str, str, str], list[Recommendation]] = {}
     for r in all_existing:
-        for combo in _get_combination_keys(r):
-            existing_by_combo[combo] = r
+        cust = (r.customer or "").strip().lower()
+        so = (r.salesOrder or "").strip().lower()
+        cert = (r.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            if g_key not in existing_by_group:
+                existing_by_group[g_key] = []
+            existing_by_group[g_key].append(r)
 
     # 1. Download and validate sizes sequentially
     total_batch_size = 0
@@ -1129,12 +1219,20 @@ async def ingest_from_blob(
             continue
 
         existing = recommendation_store.get(rec.id)
-        new_combos = _get_combination_keys(rec)
-        if existing is None and new_combos:
-            for combo in new_combos:
-                if combo in existing_by_combo:
-                    existing = existing_by_combo[combo]
-                    break
+        if existing is None:
+            cust = (rec.customer or "").strip().lower()
+            so = (rec.salesOrder or "").strip().lower()
+            cert = (rec.certificateDate or "").strip()
+            if cust and so:
+                g_key = (cust, so, cert)
+                candidates = existing_by_group.get(g_key, [])
+                new_keys = _get_combination_keys(rec)
+                if new_keys and candidates:
+                    for r in candidates:
+                        r_keys = _get_combination_keys(r)
+                        if new_keys.issubset(r_keys):
+                            existing = r
+                            break
 
         if existing is not None:
             pending.append(PendingDuplicate(
@@ -1147,8 +1245,15 @@ async def ingest_from_blob(
             ))
             continue
 
-        for combo in new_combos:
-            existing_by_combo[combo] = rec
+        cust = (rec.customer or "").strip().lower()
+        so = (rec.salesOrder or "").strip().lower()
+        cert = (rec.certificateDate or "").strip()
+        if cust and so:
+            g_key = (cust, so, cert)
+            if g_key not in existing_by_group:
+                existing_by_group[g_key] = []
+            existing_by_group[g_key].append(rec)
+
         results.append(rec)
         recommendation_store.add(rec)
 
