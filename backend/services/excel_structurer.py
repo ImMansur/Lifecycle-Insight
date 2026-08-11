@@ -38,12 +38,9 @@ RULES:
 
 
 def _build_client():
-    from openai import AzureOpenAI
-    return AzureOpenAI(
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=os.environ["AZURE_OPENAI_KEY"],
-        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
-    ), os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+    from services.openai_service import build_openai_client
+    return build_openai_client()
+
 
 
 def extract_extra_fields_sync(text: str | None) -> dict[str, Any]:

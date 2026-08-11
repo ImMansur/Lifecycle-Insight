@@ -208,15 +208,11 @@ async def suggest_next_steps(action_id: str, request: Request):
     user_msg = "\n\n".join(context_parts)
 
     try:
-        from openai import AzureOpenAI
+        from services.openai_service import build_openai_client
         import json as _json
 
-        client = AzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_KEY"],
-            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
-        )
-        deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+        client, deployment = build_openai_client()
+
 
         response = client.chat.completions.create(
             model=deployment,

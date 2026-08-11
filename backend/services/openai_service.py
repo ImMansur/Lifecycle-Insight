@@ -251,6 +251,31 @@ _OPENAI_BACKOFF_BASE = float(os.environ.get("OPENAI_BACKOFF_BASE", "1.0"))
 _OPENAI_CHUNK_CHARS = int(os.environ.get("OPENAI_CHUNK_CHARS", "25000"))
 
 
+def build_openai_client() -> tuple[Any, str]:
+    from openai import OpenAI, AzureOpenAI
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+    key = os.environ.get("AZURE_OPENAI_KEY", "")
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+
+    if "services.ai.azure.com" in endpoint:
+        base_url = endpoint
+        if not base_url.endswith("/openai/v1"):
+            base_url = base_url.rstrip("/") + "/openai/v1"
+        client = OpenAI(
+            base_url=base_url,
+            api_key=key
+        )
+    else:
+        client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=key,
+            api_version=api_version
+        )
+    return client, deployment
+
+
+
 def _overdue_magnitude_text(lifecycle: dict[str, Any]) -> str:
     """Human-readable "how far overdue" phrase, e.g. "30 months" or "12 days".
 
@@ -507,14 +532,8 @@ async def process_document(
         )
         return {}
 
-    from openai import AzureOpenAI
+    client, deployment = build_openai_client()
 
-    client = AzureOpenAI(
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=os.environ["AZURE_OPENAI_KEY"],
-        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
-    )
-    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
     chunks = _chunk_text(extracted_text)
     logger.info("OpenAI text split into %d chunk(s) for %s", len(chunks), filename)
