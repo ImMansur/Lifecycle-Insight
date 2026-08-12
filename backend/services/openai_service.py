@@ -12,6 +12,7 @@ import asyncio
 from datetime import date, datetime, timezone
 from typing import Any
 
+from openai import OpenAI, AzureOpenAI
 from models import Recommendation
 
 logger = logging.getLogger(__name__)
@@ -252,8 +253,8 @@ _OPENAI_CHUNK_CHARS = int(os.environ.get("OPENAI_CHUNK_CHARS", "25000"))
 
 
 def build_openai_client() -> tuple[Any, str]:
-    from openai import OpenAI, AzureOpenAI
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+
     key = os.environ.get("AZURE_OPENAI_KEY", "")
     api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
     deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
