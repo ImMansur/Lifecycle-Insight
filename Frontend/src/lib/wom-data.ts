@@ -78,6 +78,8 @@ export type Recommendation = {
   textPreview: string | null;
   blobUrl: string | null;
   humanReviewed?: boolean;
+  createdAt?: string | null;
+  ts?: number;
 };
 
 /** Collapse duplicate part numbers, summing quantities and keeping the

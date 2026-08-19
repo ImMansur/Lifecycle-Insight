@@ -43,12 +43,14 @@ function Dashboard() {
   const activeTab = search.tab;
 
   // Local React states instead of URL search params to ensure instant typing response
+  const [recGlobalSearch, setRecGlobalSearch] = useState("");
   const [recClients, setRecClients] = useState("");
   const [recLocations, setRecLocations] = useState("");
   const [recParts, setRecParts] = useState("");
   const [recDesc, setRecDesc] = useState("");
   const [recTimeFilter, setRecTimeFilter] = useState<TimeFilter>("all");
   const [recPriorityFilter, setRecPriorityFilter] = useState<PriorityFilter>("all");
+
 
   const setSearch = (patch: Partial<typeof search>) =>
     navigate({
@@ -104,6 +106,30 @@ function Dashboard() {
       }
       if (recPriorityFilter !== "all" && r.priority !== recPriorityFilter) return false;
       
+      // Global wildcard search criteria
+      if (recGlobalSearch) {
+        const matchesGlobal =
+          wildcardMatch(r.customer, recGlobalSearch) ||
+          wildcardMatch(r.location, recGlobalSearch) ||
+          wildcardMatch(r.equipment, recGlobalSearch) ||
+          wildcardMatch(r.salesOrder, recGlobalSearch) ||
+          wildcardMatch(r.purchaseOrder, recGlobalSearch) ||
+          wildcardMatch(r.sourceFile, recGlobalSearch) ||
+          wildcardMatch(r.applicableSpecs, recGlobalSearch) ||
+          r.partNumbers.some((p) => 
+            wildcardMatch(p.number, recGlobalSearch) || 
+            wildcardMatch(p.description, recGlobalSearch)
+          ) ||
+          (r.serials ?? []).some((s) => wildcardMatch(s, recGlobalSearch)) ||
+          (r.lineItems ?? []).some((li) => 
+            wildcardMatch(li.description, recGlobalSearch) ||
+            wildcardMatch(li.partNumber, recGlobalSearch) ||
+            (li.serials ?? []).some((s) => wildcardMatch(s, recGlobalSearch)) ||
+            (li.lotBatchNumbers ?? []).some((l) => wildcardMatch(l, recGlobalSearch))
+          );
+        if (!matchesGlobal) return false;
+      }
+
       // Free-text wildcard search criteria
       if (recClients && !wildcardMatch(r.customer, recClients)) return false;
       if (recLocations && !wildcardMatch(r.location, recLocations)) return false;
@@ -116,7 +142,8 @@ function Dashboard() {
 
       return true;
     });
-  }, [recommendations, recTimeFilter, recPriorityFilter, recClients, recLocations, recParts, recDesc]);
+  }, [recommendations, recTimeFilter, recPriorityFilter, recGlobalSearch, recClients, recLocations, recParts, recDesc]);
+
 
   // ── KPI metrics (from filtered results) ───────────────────────────────────
   const recMetrics = useMemo(() => {
@@ -186,6 +213,8 @@ function Dashboard() {
               setTimeFilter={setRecTimeFilter}
               priorityFilter={recPriorityFilter}
               setPriorityFilter={setRecPriorityFilter}
+              globalSearch={recGlobalSearch}
+              setGlobalSearch={setRecGlobalSearch}
               clientSearch={recClients}
               setClientSearch={setRecClients}
               locationSearch={recLocations}
@@ -197,6 +226,7 @@ function Dashboard() {
               count={filtered.length}
               total={recommendations.length}
             />
+
           </div>
 
           {/* ── Content Section (Solid White) ────────────────────────── */}

@@ -102,6 +102,9 @@ class Recommendation(BaseModel):
     textPreview: Optional[str] = None
     blobUrl: Optional[str] = None
     humanReviewed: bool = False
+    createdAt: Optional[str] = None
+    ts: Optional[int] = None
+
 
 
 class Summary(BaseModel):

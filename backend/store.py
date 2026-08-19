@@ -84,7 +84,10 @@ class RecommendationStore:
         results: List[Recommendation] = []
         for item in items:
             try:
+                if "_ts" in item:
+                    item["ts"] = item["_ts"]
                 results.append(Recommendation(**item))
+
             except Exception as e:
                 logging.warning(f"Skipping invalid recommendation doc {item.get('id')}: {e}")
         return results
@@ -116,7 +119,10 @@ class RecommendationStore:
             return None
         try:
             item = self.container.read_item(item=rec_id, partition_key=rec_id)
+            if "_ts" in item:
+                item["ts"] = item["_ts"]
             return Recommendation(**item)
+
         except CosmosResourceNotFoundError:
             return None
         except Exception as e:

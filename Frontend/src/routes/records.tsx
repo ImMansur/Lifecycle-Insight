@@ -96,6 +96,18 @@ function getConfidenceScore(r: {
   return Math.max(5, Math.min(100, base - ocrPenalty - fieldPenalty));
 }
 
+function formatUploadDate(isoString?: string | null, ts?: number | null): string {
+  if (!isoString && !ts) return "—";
+  try {
+    const d = ts ? new Date(ts * 1000) : new Date(isoString!);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "—";
+  }
+}
+
+
+
 // ─── Records Page Component ───────────────────────────────────────────────────
 
 function RecordsPage() {
@@ -108,18 +120,21 @@ function RecordsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [page, setPage] = useState(0);
-  const [sortKey, setSortKey] = useState<"priority" | "customer" | "recertDue" | "status" | null>(
-    null,
+  const [sortKey, setSortKey] = useState<"priority" | "customer" | "recertDue" | "status" | "createdAt" | null>(
+    "createdAt",
   );
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
 
   // Local React states for filters
+  const [recGlobalSearch, setRecGlobalSearch] = useState("");
   const [recClients, setRecClients] = useState("");
   const [recLocations, setRecLocations] = useState("");
   const [recParts, setRecParts] = useState("");
   const [recDesc, setRecDesc] = useState("");
   const [recTimeFilter, setRecTimeFilter] = useState<TimeFilter>("all");
   const [recPriorityFilter, setRecPriorityFilter] = useState<PriorityFilter>("all");
+
 
   const qc = useQueryClient();
   const deleteMutation = useMutation({
@@ -194,6 +209,30 @@ function RecordsPage() {
       }
       if (recPriorityFilter !== "all" && r.priority !== recPriorityFilter) return false;
       
+      // Global wildcard search criteria
+      if (recGlobalSearch) {
+        const matchesGlobal =
+          wildcardMatch(r.customer, recGlobalSearch) ||
+          wildcardMatch(r.location, recGlobalSearch) ||
+          wildcardMatch(r.equipment, recGlobalSearch) ||
+          wildcardMatch(r.salesOrder, recGlobalSearch) ||
+          wildcardMatch(r.purchaseOrder, recGlobalSearch) ||
+          wildcardMatch(r.sourceFile, recGlobalSearch) ||
+          wildcardMatch(r.applicableSpecs, recGlobalSearch) ||
+          r.partNumbers.some((p) => 
+            wildcardMatch(p.number, recGlobalSearch) || 
+            wildcardMatch(p.description, recGlobalSearch)
+          ) ||
+          (r.serials ?? []).some((s) => wildcardMatch(s, recGlobalSearch)) ||
+          (r.lineItems ?? []).some((li) => 
+            wildcardMatch(li.description, recGlobalSearch) ||
+            wildcardMatch(li.partNumber, recGlobalSearch) ||
+            (li.serials ?? []).some((s) => wildcardMatch(s, recGlobalSearch)) ||
+            (li.lotBatchNumbers ?? []).some((l) => wildcardMatch(l, recGlobalSearch))
+          );
+        if (!matchesGlobal) return false;
+      }
+
       if (recClients && !wildcardMatch(r.customer, recClients)) return false;
       if (recLocations && !wildcardMatch(r.location, recLocations)) return false;
       if (recParts && !r.partNumbers.some((p) => wildcardMatch(p.number, recParts))) return false;
@@ -205,7 +244,8 @@ function RecordsPage() {
 
       return true;
     });
-  }, [recommendations, recTimeFilter, recPriorityFilter, recClients, recLocations, recParts, recDesc]);
+  }, [recommendations, recTimeFilter, recPriorityFilter, recGlobalSearch, recClients, recLocations, recParts, recDesc]);
+
 
   // ── Table rows: filtered ───
   const tableRows = filtered;
@@ -224,9 +264,24 @@ function RecordsPage() {
         const bi = order[b.priority as keyof typeof order] ?? 9;
         return sortDir === "asc" ? ai - bi : bi - ai;
       }
+      if (sortKey === "createdAt") {
+        const at = a.ts ?? (a.createdAt ? new Date(a.createdAt).getTime() / 1000 : 0);
+        const bt = b.ts ?? (b.createdAt ? new Date(b.createdAt).getTime() / 1000 : 0);
+        
+        // Tie-breaker: if upload times are identical (e.g. seeded/migrated records), sort by certificateDate
+        if (Math.abs(at - bt) < 2) {
+          const ad = a.certificateDate ?? "";
+          const bd = b.certificateDate ?? "";
+          return sortDir === "asc" ? ad.localeCompare(bd) : bd.localeCompare(ad);
+        }
+        
+        return sortDir === "asc" ? at - bt : bt - at;
+      }
+
       if (sortKey === "customer") {
         av = a.customer ?? "";
         bv = b.customer ?? "";
+
       } else if (sortKey === "recertDue") {
         av = a.recertificationDue ?? "9999-12-31";
         bv = b.recertificationDue ?? "9999-12-31";
@@ -250,11 +305,13 @@ function RecordsPage() {
   }, [
     recTimeFilter,
     recPriorityFilter,
+    recGlobalSearch,
     recClients,
     recLocations,
     recParts,
     recDesc,
   ]);
+
 
   function toggleSort(key: typeof sortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -346,6 +403,8 @@ function RecordsPage() {
           setTimeFilter={setRecTimeFilter}
           priorityFilter={recPriorityFilter}
           setPriorityFilter={setRecPriorityFilter}
+          globalSearch={recGlobalSearch}
+          setGlobalSearch={setRecGlobalSearch}
           clientSearch={recClients}
           setClientSearch={setRecClients}
           locationSearch={recLocations}
@@ -356,6 +415,7 @@ function RecordsPage() {
           setDescSearch={setRecDesc}
           count={filtered.length}
           total={recommendations.length}
+
           extraActions={
             <ExportButton
               ids={selectedIds.size > 0 ? [...selectedIds] : sortedRows.map((r) => r.id)}
@@ -409,12 +469,58 @@ function RecordsPage() {
               animation: bounce-horizontal 2.5s infinite ease-in-out;
             }
           `}} />
-          {/* Spreadsheet View Header / Hint */}
-          <div className="flex items-center justify-between mb-4 px-1 select-none">
-            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 flex items-center gap-1.5">
-              <span className="size-2 rounded-full bg-primary/60 animate-pulse" />
-              Spreadsheet view
-            </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 px-1 select-none">
+            <div className="flex items-center gap-4">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-primary/60 animate-pulse" />
+                Spreadsheet view
+              </span>
+              
+              {/* Quick Sort Toggle */}
+              <div className="relative flex items-center rounded-full bg-slate-100 p-1 border border-slate-200/40 shadow-inner w-36 h-9 overflow-hidden">
+                {/* Sliding background indicator */}
+                <div
+                  className={cn(
+                    "absolute top-1 bottom-1 w-[calc(50%-6px)] rounded-full bg-white shadow-md transition-all duration-300 ease-out",
+                    sortKey === "createdAt" && sortDir === "desc"
+                      ? "left-1"
+                      : "left-[calc(50%+2px)]"
+                  )}
+                />
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortKey("createdAt");
+                    setSortDir("desc");
+                  }}
+                  className={cn(
+                    "relative z-10 w-1/2 text-center text-xs font-bold transition-colors duration-200 cursor-pointer border-0 select-none bg-transparent h-full",
+                    sortKey === "createdAt" && sortDir === "desc"
+                      ? "text-primary"
+                      : "text-slate-500 hover:text-slate-800"
+                  )}
+                >
+                  Recent
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortKey("createdAt");
+                    setSortDir("asc");
+                  }}
+                  className={cn(
+                    "relative z-10 w-1/2 text-center text-xs font-bold transition-colors duration-200 cursor-pointer border-0 select-none bg-transparent h-full",
+                    sortKey === "createdAt" && sortDir === "asc"
+                      ? "text-primary"
+                      : "text-slate-500 hover:text-slate-800"
+                  )}
+                >
+                  Oldest
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center gap-2 rounded-full bg-primary/5 border border-primary/10 px-3.5 py-1.5 text-[10.5px] font-bold text-primary animate-bounce-horizontal">
               <span>Scroll right to view more columns</span>
               <span className="text-xs font-black">→</span>
@@ -493,7 +599,16 @@ function RecordsPage() {
                   <th className="px-3 py-3 min-w-[90px]">Confidence</th>
                   <th className="px-3 py-3 min-w-[200px]">Recommendation</th>
                   <th className="px-3 py-3 min-w-[160px]">Notes</th>
+                  <th className="px-3 py-3 min-w-[120px]">
+                    <button
+                      onClick={() => toggleSort("createdAt")}
+                      className="flex items-center gap-1 hover:text-slate-900 transition-colors cursor-pointer focus:outline-none"
+                    >
+                      Uploaded <SortIcon col="createdAt" />
+                    </button>
+                  </th>
                   <th className="px-3 py-3 min-w-[160px]">Source File</th>
+
                   <th className="w-12 px-3 py-3 text-right"></th>
                 </tr>
               </thead>
@@ -502,7 +617,8 @@ function RecordsPage() {
                 {/* Loading */}
                 {isLoading && (
                   <tr>
-                    <td colSpan={22} className="py-28 text-center bg-white">
+                    <td colSpan={23} className="py-28 text-center bg-white">
+
                       <div className="flex flex-col items-center justify-center gap-4">
                         <div className="relative size-12 mx-auto">
                           <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
@@ -517,7 +633,8 @@ function RecordsPage() {
                 {/* Error */}
                 {isError && (
                   <tr>
-                    <td colSpan={22} className="py-28 text-center bg-white">
+                    <td colSpan={23} className="py-28 text-center bg-white">
+
                       <div className="flex flex-col items-center justify-center gap-5 max-w-md mx-auto">
                         <div className="flex size-16 items-center justify-center rounded-2xl bg-destructive/8 ring-1 ring-destructive/20 mx-auto">
                           <AlertTriangle className="size-7 text-destructive/70" />
@@ -542,7 +659,8 @@ function RecordsPage() {
                 {/* Empty — no documents */}
                 {!isLoading && !isError && recommendations.length === 0 && (
                   <tr>
-                    <td colSpan={22} className="py-28 text-center bg-white">
+                    <td colSpan={23} className="py-28 text-center bg-white">
+
                       <div className="flex flex-col items-center justify-center gap-5 max-w-md mx-auto">
                         <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.03] ring-1 ring-border/40 mx-auto">
                           <FileSearch className="size-7 text-muted-foreground/40" />
@@ -571,7 +689,8 @@ function RecordsPage() {
                 {/* Empty — no filter match */}
                 {!isLoading && !isError && recommendations.length > 0 && tableRows.length === 0 && (
                   <tr>
-                    <td colSpan={22} className="py-28 text-center bg-white">
+                    <td colSpan={23} className="py-28 text-center bg-white">
+
                       <div className="flex flex-col items-center justify-center gap-4 max-w-md mx-auto">
                         <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.03] ring-1 ring-border/40 mx-auto">
                           <FileSearch className="size-7 text-muted-foreground/40" />
@@ -1097,6 +1216,12 @@ function RecordsPage() {
                           {r.notes ?? <span className="text-slate-300/60">—</span>}
                         </td>
 
+                        {/* Uploaded Date */}
+                        <td className="px-3 py-3 align-middle font-mono text-xs whitespace-nowrap text-slate-500 font-semibold" title={r.createdAt || (r.ts ? new Date(r.ts * 1000).toLocaleString() : "")}>
+                          {(r.createdAt || r.ts) ? formatUploadDate(r.createdAt, r.ts) : <span className="text-slate-300/60">—</span>}
+                        </td>
+
+
                         {/* Source File */}
                         <td
                           className="px-3 py-3 align-middle font-mono text-[10px] text-slate-400 max-w-[220px] truncate font-semibold uppercase tracking-wide"
@@ -1104,6 +1229,7 @@ function RecordsPage() {
                         >
                           {r.sourceFile}
                         </td>
+
 
                         {/* Actions */}
                         <td

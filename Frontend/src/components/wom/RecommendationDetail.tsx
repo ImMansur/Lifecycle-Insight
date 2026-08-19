@@ -38,6 +38,8 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
+
 } from "lucide-react";
 
 /** Duration phrase for email copy, e.g. "12 days" or "3 months" — falls back
@@ -548,12 +550,17 @@ export function RecommendationDetail({
   open,
   onOpenChange,
   linkedAction,
+  onNext,
+  onPrev,
 }: {
   rec: Recommendation | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   linkedAction?: Action | null;
+  onNext?: () => void;
+  onPrev?: () => void;
 }) {
+
   const [emailOpen, setEmailOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<RecommendationPatch>({});
@@ -871,6 +878,25 @@ export function RecommendationDetail({
                 <div className="flex items-center gap-2">
                   <PriorityChip priority={rec.priority} />
                   <StatusBadge status={rec.status} />
+                  {onPrev && (
+                    <button
+                      onClick={onPrev}
+                      className="ml-2 rounded-lg border border-border/50 bg-secondary/50 p-1 text-muted-foreground hover:text-foreground transition-all hover:bg-secondary"
+                      title="Previous record"
+                    >
+                      <ChevronLeft className="size-4" />
+                    </button>
+                  )}
+                  {onNext && (
+                    <button
+                      onClick={onNext}
+                      className="rounded-lg border border-border/50 bg-secondary/50 p-1 text-muted-foreground hover:text-foreground transition-all hover:bg-secondary"
+                      title="Next record"
+                    >
+                      <ChevronRight className="size-4" />
+                    </button>
+                  )}
+
                   {needsReview && !editing && (
                     <span className="flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-bold text-warning">
                       <AlertTriangle className="size-3" />

@@ -716,6 +716,8 @@ export function FilterBar({
   setTimeFilter,
   priorityFilter,
   setPriorityFilter,
+  globalSearch,
+  setGlobalSearch,
   clientSearch,
   setClientSearch,
   locationSearch,
@@ -732,6 +734,8 @@ export function FilterBar({
   setTimeFilter: (v: TimeFilter) => void;
   priorityFilter: PriorityFilter;
   setPriorityFilter: (v: PriorityFilter) => void;
+  globalSearch: string;
+  setGlobalSearch: (v: string) => void;
   clientSearch: string;
   setClientSearch: (v: string) => void;
   locationSearch: string;
@@ -744,6 +748,7 @@ export function FilterBar({
   total: number;
   extraActions?: React.ReactNode;
 }) {
+
   const timeOptions: [TimeFilter, string][] = [
     ["all", "All time"],
     ["overdue", "Overdue"],
@@ -757,6 +762,15 @@ export function FilterBar({
     ["Low", "Low"],
     ["Manual review", "Manual review"],
   ];
+
+  const hasDeepFilters = !!(clientSearch || locationSearch || partSearch || descSearch);
+  const [showAdvanced, setShowAdvanced] = useState(hasDeepFilters);
+
+  useEffect(() => {
+    if (hasDeepFilters) {
+      setShowAdvanced(true);
+    }
+  }, [hasDeepFilters]);
 
   return (
     <div className="sticky top-20 z-30 mb-8 rounded-[2.5rem] border border-border/40 bg-white px-8 py-6 shadow-2xl shadow-black/[0.04]">
@@ -819,36 +833,59 @@ export function FilterBar({
           </div>
         </div>
 
-        {/* Row 2: Deep Filters */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 sm:grid-cols-2">
-          <SearchInput
-            value={clientSearch}
-            onChange={setClientSearch}
-            placeholder="Search customer…"
-            icon={<Users className="size-4" />}
-          />
-          <SearchInput
-            value={locationSearch}
-            onChange={setLocationSearch}
-            placeholder="Search location…"
-            icon={<MapPin className="size-4" />}
-          />
-          <SearchInput
-            value={partSearch}
-            onChange={setPartSearch}
-            placeholder="Search item / part…"
-            icon={<Package className="size-4" />}
-          />
-          <SearchInput
-            value={descSearch}
-            onChange={setDescSearch}
-            placeholder="Search item description…"
-            icon={<FileText className="size-4" />}
-          />
+        {/* Row 2: Global Search & Advanced Toggle */}
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <SearchInput
+              value={globalSearch}
+              onChange={setGlobalSearch}
+              placeholder="Search by customer, location, equipment, part, serial, SO, PO, file..."
+              icon={<Search className="size-4" />}
+            />
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="h-11 font-bold rounded-xl border-border/50 text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <Filter className="mr-2 size-4" />
+            {showAdvanced ? "Hide Advanced" : "Advanced Filters"}
+          </Button>
         </div>
+
+        {/* Row 3: Deep Filters (Collapsible) */}
+        {showAdvanced && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 sm:grid-cols-2 pt-2 animate-in fade-in slide-in-from-top-3 duration-200">
+            <SearchInput
+              value={clientSearch}
+              onChange={setClientSearch}
+              placeholder="Search customer…"
+              icon={<Users className="size-4" />}
+            />
+            <SearchInput
+              value={locationSearch}
+              onChange={setLocationSearch}
+              placeholder="Search location…"
+              icon={<MapPin className="size-4" />}
+            />
+            <SearchInput
+              value={partSearch}
+              onChange={setPartSearch}
+              placeholder="Search item / part…"
+              icon={<Package className="size-4" />}
+            />
+            <SearchInput
+              value={descSearch}
+              onChange={setDescSearch}
+              placeholder="Search item description…"
+              icon={<FileText className="size-4" />}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
+
 }
 
 // ─── Upcoming Recerts List ────────────────────────────────────────────────────
@@ -1670,10 +1707,12 @@ export function HomeTab({
 }: HomeTabProps) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
+  const [globalSearch, setGlobalSearch] = useState("");
   const [clientSearch, setClientSearch] = useState("");
   const [locationSearch, setLocationSearch] = useState("");
   const [partSearch, setPartSearch] = useState("");
   const [descSearch, setDescSearch] = useState("");
+
 
   // ── Apply filters ──────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -1693,6 +1732,30 @@ export function HomeTab({
       // Priority filter
       if (priorityFilter !== "all" && r.priority !== priorityFilter) return false;
 
+      // Global wildcard search criteria
+      if (globalSearch) {
+        const matchesGlobal =
+          wildcardMatch(r.customer, globalSearch) ||
+          wildcardMatch(r.location, globalSearch) ||
+          wildcardMatch(r.equipment, globalSearch) ||
+          wildcardMatch(r.salesOrder, globalSearch) ||
+          wildcardMatch(r.purchaseOrder, globalSearch) ||
+          wildcardMatch(r.sourceFile, globalSearch) ||
+          wildcardMatch(r.applicableSpecs, globalSearch) ||
+          r.partNumbers.some((p) => 
+            wildcardMatch(p.number, globalSearch) || 
+            wildcardMatch(p.description, globalSearch)
+          ) ||
+          (r.serials ?? []).some((s) => wildcardMatch(s, globalSearch)) ||
+          (r.lineItems ?? []).some((li) => 
+            wildcardMatch(li.description, globalSearch) ||
+            wildcardMatch(li.partNumber, globalSearch) ||
+            (li.serials ?? []).some((s) => wildcardMatch(s, globalSearch)) ||
+            (li.lotBatchNumbers ?? []).some((l) => wildcardMatch(l, globalSearch))
+          );
+        if (!matchesGlobal) return false;
+      }
+
       // Free-text wildcard search criteria
       if (clientSearch && !wildcardMatch(r.customer, clientSearch)) return false;
       if (locationSearch && !wildcardMatch(r.location, locationSearch)) return false;
@@ -1708,11 +1771,13 @@ export function HomeTab({
     recommendations,
     timeFilter,
     priorityFilter,
+    globalSearch,
     clientSearch,
     locationSearch,
     partSearch,
     descSearch,
   ]);
+
 
   // ── Derived metrics ────────────────────────────────────────────────────────
   const metrics = useMemo(() => {
@@ -1876,10 +1941,16 @@ export function HomeTab({
   const noData = !isLoading && !isError && recommendations.length === 0;
   const isEmpty = !isLoading && !isError && filtered.length === 0 && recommendations.length > 0;
 
-  // Records that need human review and haven't been reviewed yet
-  const needsHumanReview = recommendations.filter(
-    (r) => r.priority === "Manual review" && !r.humanReviewed,
-  );
+  // Records that need human review and haven't been reviewed yet (sorted by upload date desc)
+  const needsHumanReview = useMemo(() => {
+    return recommendations
+      .filter((r) => r.priority === "Manual review" && !r.humanReviewed)
+      .sort((a, b) => {
+        const at = a.ts ?? (a.createdAt ? new Date(a.createdAt).getTime() / 1000 : 0);
+        const bt = b.ts ?? (b.createdAt ? new Date(b.createdAt).getTime() / 1000 : 0);
+        return bt - at;
+      });
+  }, [recommendations]);
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-6 py-8">
@@ -1991,6 +2062,8 @@ export function HomeTab({
             setTimeFilter={setTimeFilter}
             priorityFilter={priorityFilter}
             setPriorityFilter={setPriorityFilter}
+            globalSearch={globalSearch}
+            setGlobalSearch={setGlobalSearch}
             clientSearch={clientSearch}
             setClientSearch={setClientSearch}
             locationSearch={locationSearch}
@@ -2002,6 +2075,7 @@ export function HomeTab({
             count={filtered.length}
             total={recommendations.length}
           />
+
 
           {/* ── KPI Grid ────────────────────────────────────────────────── */}
           <div className="mb-10 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">

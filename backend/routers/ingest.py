@@ -231,7 +231,7 @@ def _check_page_limit(file_bytes: bytes, filename: str, ext: str) -> str | None:
     return None
 
 
-def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str]]:
+def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str, str]]:
     cust = (rec.customer or "").strip().lower()
     so = (rec.salesOrder or "").strip().lower()
     cert = (rec.certificateDate or "").strip()
@@ -246,7 +246,16 @@ def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str]]
             desc = (item.description or "").strip().lower()
             val = pn if pn else desc
             if val:
-                keys.add((cust, so, cert, val))
+                item_serials = [s.strip().lower() for s in item.serials if s and s.strip()]
+                if not item_serials:
+                    # Fall back to flat serials if this specific line item has no serials
+                    item_serials = [s.strip().lower() for s in rec.serials if s and s.strip()]
+                
+                if item_serials:
+                    for s in item_serials:
+                        keys.add((cust, so, cert, val, s))
+                else:
+                    keys.add((cust, so, cert, val, ""))
 
     # 2. Fall back to flat arrays if no keys were generated from lineItems
     if not keys:
@@ -255,13 +264,60 @@ def _get_combination_keys(rec: Recommendation) -> set[tuple[str, str, str, str]]
             desc = (p.description or "").strip().lower()
             val = pn if pn else desc
             if val:
-                keys.add((cust, so, cert, val))
+                part_serials = [s.strip().lower() for s in rec.serials if s and s.strip()]
+                if part_serials:
+                    for s in part_serials:
+                        keys.add((cust, so, cert, val, s))
+                else:
+                    keys.add((cust, so, cert, val, ""))
 
-    # 3. Fall back to empty string for part/item if still empty
+    # 3. Fall back to empty string for part/item and serials if still empty
     if not keys:
-        keys.add((cust, so, cert, ""))
+        flat_serials = [s.strip().lower() for s in rec.serials if s and s.strip()]
+        if flat_serials:
+            for s in flat_serials:
+                keys.add((cust, so, cert, "", s))
+        else:
+            keys.add((cust, so, cert, "", ""))
 
     return keys
+
+
+def _check_is_duplicate(rec: Recommendation, candidates: list[Recommendation], filename: str) -> Recommendation | None:
+    from datetime import datetime, timezone
+    new_keys = _get_combination_keys(rec)
+    
+    # Debug logging
+    try:
+        with open("debug_duplicates.log", "a") as f:
+            f.write(f"\n--- {datetime.now(timezone.utc).isoformat()} ---\n")
+            f.write(f"Checking file: {filename} (ID: {rec.id})\n")
+            f.write(f"  Customer: {rec.customer}, SO: {rec.salesOrder}, Cert: {rec.certificateDate}\n")
+            f.write(f"  New keys: {new_keys}\n")
+            f.write(f"  Candidates: {len(candidates)}\n")
+    except Exception as e:
+        logger.error(f"Failed to write duplicate log: {e}")
+
+    if not new_keys or not candidates:
+        return None
+        
+    for r in candidates:
+        r_keys = _get_combination_keys(r)
+        is_sub = new_keys.issubset(r_keys)
+        
+        try:
+            with open("debug_duplicates.log", "a") as f:
+                f.write(f"  Comparing against: {r.sourceFile} (ID: {r.id})\n")
+                f.write(f"    Existing keys: {r_keys}\n")
+                f.write(f"    is_subset: {is_sub}\n")
+        except Exception as e:
+            logger.error(f"Failed to write duplicate log: {e}")
+            
+        if is_sub:
+            return r
+            
+    return None
+
 
 
 # Background task definitions
@@ -333,13 +389,7 @@ async def background_ingest_files(
                 if cust and so:
                     g_key = (cust, so, cert)
                     candidates = existing_by_group.get(g_key, [])
-                    new_keys = _get_combination_keys(rec)
-                    if new_keys and candidates:
-                        for r in candidates:
-                            r_keys = _get_combination_keys(r)
-                            if new_keys.issubset(r_keys):
-                                existing = r
-                                break
+                    existing = _check_is_duplicate(rec, candidates, rec.sourceFile)
 
             if existing is not None:
                 pending.append(PendingDuplicate(
@@ -449,13 +499,7 @@ async def background_ingest_from_blob(
                 if cust and so:
                     g_key = (cust, so, cert)
                     candidates = existing_by_group.get(g_key, [])
-                    new_keys = _get_combination_keys(rec)
-                    if new_keys and candidates:
-                        for r in candidates:
-                            r_keys = _get_combination_keys(r)
-                            if new_keys.issubset(r_keys):
-                                existing = r
-                                break
+                    existing = _check_is_duplicate(rec, candidates, rec.sourceFile)
 
             if existing is not None:
                 pending.append(PendingDuplicate(
@@ -761,13 +805,7 @@ async def ingest_files(
             if cust and so:
                 g_key = (cust, so, cert)
                 candidates = existing_by_group.get(g_key, [])
-                new_keys = _get_combination_keys(rec)
-                if new_keys and candidates:
-                    for r in candidates:
-                        r_keys = _get_combination_keys(r)
-                        if new_keys.issubset(r_keys):
-                            existing = r
-                            break
+                existing = _check_is_duplicate(rec, candidates, rec.sourceFile)
 
         if existing is not None:
             pending.append(PendingDuplicate(
@@ -938,13 +976,7 @@ async def _process_one_file(
         if cust and so:
             g_key = (cust, so, cert)
             candidates = existing_by_group.get(g_key, [])
-            new_keys = _get_combination_keys(rec)
-            if new_keys and candidates:
-                for r in candidates:
-                    r_keys = _get_combination_keys(r)
-                    if new_keys.issubset(r_keys):
-                        existing = r
-                        break
+            existing = _check_is_duplicate(rec, candidates, filename)
 
     if existing is not None:
         return None, PendingDuplicate(
@@ -1226,13 +1258,7 @@ async def ingest_from_blob(
             if cust and so:
                 g_key = (cust, so, cert)
                 candidates = existing_by_group.get(g_key, [])
-                new_keys = _get_combination_keys(rec)
-                if new_keys and candidates:
-                    for r in candidates:
-                        r_keys = _get_combination_keys(r)
-                        if new_keys.issubset(r_keys):
-                            existing = r
-                            break
+                existing = _check_is_duplicate(rec, candidates, rec.sourceFile)
 
         if existing is not None:
             pending.append(PendingDuplicate(

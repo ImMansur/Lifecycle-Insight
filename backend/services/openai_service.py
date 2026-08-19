@@ -402,6 +402,7 @@ async def process_document(
             recommendation="Run OCR or manually review the CoC before creating a sales or recertification lead.",
             confidence="Low",
             notes="No machine-readable text found. Likely a scanned PDF or image-only document.",
+            createdAt=datetime.now(timezone.utc).isoformat(),
         )
 
     def _chunk_text(raw_text: str) -> list[str]:
@@ -716,6 +717,7 @@ async def process_document(
         confidence=confidence,
         notes=data.get("notes") or None,
         textPreview=(data.get("textPreview") or "")[:2000],
+        createdAt=datetime.now(timezone.utc).isoformat(),
     )
 
     logger.info(

@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingScreen, type FileUploadProgress } from "@/components/wom/LoadingScreen";
 import { NotificationBell } from "@/components/wom/NotificationBell";
+
+
 import {
   Upload,
   FileText,
@@ -153,6 +155,8 @@ function UploadPage() {
   }, [user, loading, navigate]);
   const [progress, setProgress] = useState(0);
   const [uploadResult, setUploadResult] = useState<IngestResponse | null>(null);
+
+
   // Duplicate-confirmation popup state
   const [pendingDuplicates, setPendingDuplicates] = useState<PendingDuplicate[]>([]);
   const [savedCount, setSavedCount] = useState(0);
@@ -531,6 +535,7 @@ function UploadPage() {
             >
               Go to Dashboard
             </Button>
+
           </div>
         </div>
       ) : (
@@ -899,5 +904,6 @@ function UploadPage() {
       </Dialog>
     </div>
     </>
+
   );
 }
